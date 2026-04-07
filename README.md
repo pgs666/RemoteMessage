@@ -44,6 +44,10 @@
 - 客户端发起“发送短信”请求时：
   - 服务器使用网关公钥加密指令并入队
   - 网关轮询获取任务后使用私钥解密，再调用 `SmsManager` 发送
+- 新增历史与去重机制：
+  - 网关可执行“历史短信同步”（读取系统短信数据库）
+  - 服务端基于 `messageId` 做去重存储
+  - 客户端支持 `sinceTs` 增量拉取并本地缓存，避免重复获取
 
 ---
 
@@ -70,6 +74,7 @@ gh repo create RemoteMessage --public --source . --remote origin --push
 - `flutter-client.yml`
   - 在 CI 中动态生成 Flutter 工程并覆盖 `lib/main.dart`
   - 构建：Linux / Windows / Android APK / iOS(no-codesign)
+  - Linux job 已补齐 `libgtk-3-dev` 依赖，修复 `gtk+-3.0` 缺失导致的编译失败
 - `android-gateway.yml`
   - 构建原生 Android 网关 APK
 - `middle-server.yml`
@@ -93,11 +98,13 @@ gh repo create RemoteMessage --public --source . --remote origin --push
 ### 1) Flutter 客户端（Windows / Android / iOS / Linux）
 
 - ✅ 已实现基础功能：
-  - 配置服务器地址与网关设备 ID
-  - 拉取短信收件箱（`/api/client/inbox`）
-  - 提交发信任务（`/api/client/send`）
-- ⚠️ 当前状态：**MVP 骨架**（UI 与接口联通优先）
-- 🔧 后续建议：离线缓存、登录鉴权、消息状态回执、端到端加密会话管理
+  - 聊天软件风格 UI（会话列表 + 聊天窗口 + 气泡消息）
+  - 新建短信对话（New SMS 弹窗）
+  - 增量同步与全量加载（`sinceTs` / Load All）
+  - 本地缓存去重（按 `messageId`），避免重复获取同一短信
+  - 发送短信任务（`/api/client/send`）
+- ⚠️ 当前状态：**MVP+**（已具备聊天体验与缓存）
+- 🔧 后续建议：SQLite 持久化、消息已送达状态、搜索/置顶会话
 
 ### 2) Android 原生网关（ARM64）
 
@@ -105,6 +112,8 @@ gh repo create RemoteMessage --public --source . --remote origin --push
   - 接收系统 SMS 广播并上报服务器
   - 轮询服务器拉取待发送任务并调用 `SmsManager` 发送
   - 本地生成 RSA 密钥对、向服务器注册公钥
+  - 历史短信同步按钮（读取系统短信并批量上报）
+  - 上报时附带 `messageId` + `direction` 便于服务端去重
 - ✅ CI 失败点已修复：AndroidX 配置已补齐
 - ⚠️ 生产前仍需完善：前台服务保活、重试队列、双卡支持、权限引导细化
 
@@ -113,8 +122,9 @@ gh repo create RemoteMessage --public --source . --remote origin --push
 - ✅ 已实现基础功能：
   - 服务器公钥下发
   - 网关注册与公钥保存
-  - 上行短信解密入库（内存队列）
+  - 上行短信解密入库（内存存储）
   - 下行任务使用网关公钥加密并供网关拉取
+  - `messageId` 去重与 `sinceTs` 增量查询
 - ✅ CI 已通过 Linux x64/arm64 发布流程
 - ⚠️ 生产前仍需完善：持久化存储、鉴权、审计日志、限流与告警
 

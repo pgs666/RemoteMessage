@@ -50,6 +50,13 @@
                 android:text="Poll Once" />
         </LinearLayout>
 
+        <Button
+            android:id="@+id/btnSyncHistory"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="Sync Historical SMS" />
+
         <TextView
             android:id="@+id/textStatus"
             android:layout_width="match_parent"

@@ -17,12 +17,22 @@ class SmsReceiver : BroadcastReceiver() {
         val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId)
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
         messages.forEach { sms ->
+            val direction = "inbound"
+            val msgId = GatewayRuntime.buildMessageId(
+                deviceId = cfg.deviceId,
+                phone = sms.originatingAddress ?: "unknown",
+                content = sms.messageBody ?: "",
+                timestamp = sms.timestampMillis,
+                direction = direction
+            )
             GatewayRuntime.uploadInboundSms(
                 context = context,
                 cfg = cfg,
                 phone = sms.originatingAddress ?: "unknown",
                 content = sms.messageBody ?: "",
-                timestamp = sms.timestampMillis
+                timestamp = sms.timestampMillis,
+                direction = direction,
+                messageId = msgId
             )
         }
     }

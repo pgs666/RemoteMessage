@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
         val btnSave = findViewById<Button>(R.id.btnSave)
         val btnRegister = findViewById<Button>(R.id.btnRegister)
         val btnPollOnce = findViewById<Button>(R.id.btnPollOnce)
+        val btnSyncHistory = findViewById<Button>(R.id.btnSyncHistory)
 
         editServer.setText(pref.getString("server_base", "http://10.0.2.2:5000") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
@@ -58,6 +59,16 @@ class MainActivity : ComponentActivity() {
                 deviceId = editDeviceId.text.toString().trim()
             )
             GatewayRuntime.pollAndSend(this, cfg) {
+                runOnUiThread { textStatus.text = it }
+            }
+        }
+
+        btnSyncHistory.setOnClickListener {
+            val cfg = GatewayConfig(
+                serverBaseUrl = editServer.text.toString().trim(),
+                deviceId = editDeviceId.text.toString().trim()
+            )
+            GatewayRuntime.syncHistoricalSms(this, cfg) {
                 runOnUiThread { textStatus.text = it }
             }
         }
