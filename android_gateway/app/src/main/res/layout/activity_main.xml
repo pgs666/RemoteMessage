@@ -82,6 +82,13 @@
             android:text="@string/btn_sync_history" />
 
         <Button
+            android:id="@+id/btnTestLocalSms"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/btn_test_local_sms" />
+
+        <Button
             android:id="@+id/btnFlushPending"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"

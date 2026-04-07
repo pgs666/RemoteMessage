@@ -53,6 +53,7 @@ class MainActivity : ComponentActivity() {
         val btnRegister = findViewById<Button>(R.id.btnRegister)
         val btnPollOnce = findViewById<Button>(R.id.btnPollOnce)
         val btnSyncHistory = findViewById<Button>(R.id.btnSyncHistory)
+        val btnTestLocalSms = findViewById<Button>(R.id.btnTestLocalSms)
         val btnFlushPending = findViewById<Button>(R.id.btnFlushPending)
         val btnImportCert = findViewById<Button>(R.id.btnImportCert)
         val btnRequestSmsRole = findViewById<Button>(R.id.btnRequestSmsRole)
@@ -138,6 +139,12 @@ class MainActivity : ComponentActivity() {
                 simSubId = editSimSubId.text.toString().trim().toIntOrNull()
             )
             GatewayRuntime.syncHistoricalSms(this, cfg) {
+                runOnUiThread { textStatus.text = it }
+            }
+        }
+
+        btnTestLocalSms.setOnClickListener {
+            GatewayRuntime.inspectLocalSmsAccess(this) {
                 runOnUiThread { textStatus.text = it }
             }
         }

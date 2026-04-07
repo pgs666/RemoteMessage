@@ -34,6 +34,14 @@ data class GatewayConfig(
     val simSubId: Int? = null
 )
 
+data class LocalSmsStats(
+    val total: Int,
+    val inbound: Int,
+    val outbound: Int,
+    val oldestTimestamp: Long?,
+    val latestTimestamp: Long?
+)
+
 object GatewayRuntime {
     private var db: GatewayLocalDb? = null
     private const val PREF = "gateway_crypto"
@@ -190,6 +198,57 @@ object GatewayRuntime {
                 callback("History sync error: ${it.message}")
             }
         }
+    }
+
+    fun inspectLocalSmsAccess(context: Context, callback: (String) -> Unit) {
+        thread {
+            runCatching {
+                val stats = readLocalSmsStats(context)
+                callback(
+                    "Local SMS readable: total=${stats.total}, inbound=${stats.inbound}, outbound=${stats.outbound}, oldest=${stats.oldestTimestamp ?: 0}, latest=${stats.latestTimestamp ?: 0}"
+                )
+            }.onFailure {
+                callback("Local SMS test error: ${it.message}")
+            }
+        }
+    }
+
+    private fun readLocalSmsStats(context: Context): LocalSmsStats {
+        val uri = Telephony.Sms.CONTENT_URI
+        val projection = arrayOf(Telephony.Sms.DATE, Telephony.Sms.TYPE)
+        val cursor = context.contentResolver.query(uri, projection, null, null, null)
+            ?: error("query sms failed")
+
+        var total = 0
+        var inbound = 0
+        var outbound = 0
+        var oldest: Long? = null
+        var latest: Long? = null
+
+        cursor.use {
+            val dateIdx = it.getColumnIndexOrThrow(Telephony.Sms.DATE)
+            val typeIdx = it.getColumnIndexOrThrow(Telephony.Sms.TYPE)
+            while (it.moveToNext()) {
+                total++
+                val ts = it.getLong(dateIdx)
+                val type = it.getInt(typeIdx)
+                if (type == Telephony.Sms.MESSAGE_TYPE_SENT) {
+                    outbound++
+                } else {
+                    inbound++
+                }
+                oldest = oldest?.let { current -> minOf(current, ts) } ?: ts
+                latest = latest?.let { current -> maxOf(current, ts) } ?: ts
+            }
+        }
+
+        return LocalSmsStats(
+            total = total,
+            inbound = inbound,
+            outbound = outbound,
+            oldestTimestamp = oldest,
+            latestTimestamp = latest
+        )
     }
 
     fun buildMessageId(deviceId: String, phone: String, content: String, timestamp: Long, direction: String): String {

@@ -11,6 +11,7 @@
     <string name="btn_register">Register</string>
     <string name="btn_poll_once">Poll Once</string>
     <string name="btn_sync_history">Sync Historical SMS</string>
+    <string name="btn_test_local_sms">Test Local SMS Read</string>
     <string name="btn_flush_pending">Flush Pending Uploads</string>
     <string name="btn_import_cert">Import Server Certificate</string>
     <string name="btn_request_sms_role">Request Default SMS Role</string>

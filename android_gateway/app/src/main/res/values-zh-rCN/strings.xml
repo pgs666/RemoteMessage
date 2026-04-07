@@ -11,6 +11,7 @@
     <string name="btn_register">注册</string>
     <string name="btn_poll_once">轮询一次</string>
     <string name="btn_sync_history">同步历史短信</string>
+    <string name="btn_test_local_sms">测试本地短信读取</string>
     <string name="btn_flush_pending">补传待发送队列</string>
     <string name="btn_import_cert">导入服务器证书</string>
     <string name="btn_request_sms_role">申请默认短信应用</string>
