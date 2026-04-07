@@ -8,28 +8,27 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<CryptoState>();
 builder.Services.AddSingleton<GatewayRegistry>();
 builder.Services.AddSingleton<SqliteRepository>();
-builder.Services.AddSingleton<ApiSecuritySettings>();
+builder.Services.AddSingleton<PasswordSecuritySettings>();
 
 var app = builder.Build();
 
 app.Use(async (context, next) =>
 {
     var repo = context.RequestServices.GetRequiredService<SqliteRepository>();
-    var sec = context.RequestServices.GetRequiredService<ApiSecuritySettings>();
+    var sec = context.RequestServices.GetRequiredService<PasswordSecuritySettings>();
 
     var path = context.Request.Path.Value ?? string.Empty;
-    var requiresAuth = !path.Equals("/api/crypto/server-public-key", StringComparison.OrdinalIgnoreCase)
-                       && !path.Equals("/healthz", StringComparison.OrdinalIgnoreCase);
+    var requiresAuth = !path.Equals("/healthz", StringComparison.OrdinalIgnoreCase);
 
     var begin = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
 
     if (requiresAuth)
     {
-        var token = context.Request.Headers["X-Api-Key"].ToString();
-        if (!string.Equals(token, sec.ApiKey, StringComparison.Ordinal))
+        var password = context.Request.Headers["X-Password"].ToString();
+        if (!string.Equals(password, sec.Password, StringComparison.Ordinal))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsJsonAsync(new { error = "invalid api key" });
+            await context.Response.WriteAsJsonAsync(new { error = "invalid password" });
             repo.InsertApiLog(context.Request.Method, path, 401, context.Connection.RemoteIpAddress?.ToString() ?? "unknown", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - begin);
             return;
         }
@@ -222,16 +221,44 @@ public sealed class GatewayRegistry
     }
 }
 
-public sealed class ApiSecuritySettings
+public sealed class PasswordSecuritySettings
 {
-    public string ApiKey { get; }
+    public string Password { get; }
+    public string PasswordFilePath { get; }
 
-    public ApiSecuritySettings()
+    public PasswordSecuritySettings()
     {
-        ApiKey = Environment.GetEnvironmentVariable("REMOTE_MESSAGE_API_KEY")?.Trim();
-        if (string.IsNullOrWhiteSpace(ApiKey))
+        PasswordFilePath = Path.Combine(AppContext.BaseDirectory, "password.conf");
+        if (!File.Exists(PasswordFilePath))
         {
-            ApiKey = "change-me-in-production";
+            var generated = Convert.ToBase64String(RandomNumberGenerator.GetBytes(18));
+            File.WriteAllText(
+                PasswordFilePath,
+                "# RemoteMessage password.conf\n# Edit the password value below\npassword=" + generated + "\n",
+                Encoding.UTF8
+            );
+            Password = generated;
+            return;
+        }
+
+        var lines = File.ReadAllLines(PasswordFilePath, Encoding.UTF8);
+        var raw = lines
+            .Select(x => x.Trim())
+            .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x) && !x.StartsWith("#", StringComparison.Ordinal));
+
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            Password = "change-me";
+            return;
+        }
+
+        Password = raw.Contains('=')
+            ? raw[(raw.IndexOf('=') + 1)..].Trim()
+            : raw;
+
+        if (string.IsNullOrWhiteSpace(Password))
+        {
+            Password = "change-me";
         }
     }
 }

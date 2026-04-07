@@ -32,9 +32,9 @@ object GatewayRuntime {
         .addInterceptor(Interceptor { chain ->
             val original = chain.request()
             val req = original.newBuilder()
-            val apiKey = RuntimeConfig.apiKey?.trim()
-            if (!apiKey.isNullOrEmpty()) {
-                req.header("X-Api-Key", apiKey)
+            val password = RuntimeConfig.password?.trim()
+            if (!password.isNullOrEmpty()) {
+                req.header("X-Password", password)
             }
             chain.proceed(req.build())
         })
@@ -295,5 +295,5 @@ object GatewayRuntime {
 
 object RuntimeConfig {
     @Volatile
-    var apiKey: String? = null
+    var password: String? = null
 }

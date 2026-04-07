@@ -38,7 +38,7 @@ class _RemoteMessageAppState extends State<RemoteMessageApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'RemoteMessage Client',
+      title: 'RemoteMessage',
       themeMode: _themeMode,
       theme: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true, brightness: Brightness.light),
       darkTheme: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true, brightness: Brightness.dark),
@@ -77,6 +77,9 @@ class _MessageHomePageState extends State<MessageHomePage> {
   String? _activePhone;
   int _lastSyncTs = 0;
 
+  bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
+  String tr(String zh, String en) => _isZh ? zh : en;
+
   @override
   void initState() {
     super.initState();
@@ -106,21 +109,22 @@ class _MessageHomePageState extends State<MessageHomePage> {
 
     _serverCtrl.text = result.serverBaseUrl;
     _deviceCtrl.text = result.deviceId;
+    widget.settings.password = result.password;
     widget.onThemeChanged(result.themeMode);
-    setState(() => _status = 'Settings updated');
+    setState(() => _status = tr('设置已更新', 'Settings updated'));
   }
 
   Future<void> _syncInbox({bool fullSync = false}) async {
     setState(() {
       _loading = true;
-      _status = fullSync ? 'Loading full history...' : 'Syncing new messages...';
+      _status = fullSync ? tr('加载完整历史中...', 'Loading full history...') : tr('正在同步新消息...', 'Syncing new messages...');
     });
 
     try {
       final server = _serverCtrl.text.trim();
       final since = fullSync ? 0 : _lastSyncTs;
       final url = Uri.parse('$server/api/client/inbox?sinceTs=$since&limit=10000');
-      final response = await _getJson(url);
+      final response = await _getJson(url, password: widget.settings.password);
       final list = (jsonDecode(response) as List)
           .map((e) => SmsItem.fromJson(e as Map<String, dynamic>))
           .toList();
@@ -141,10 +145,10 @@ class _MessageHomePageState extends State<MessageHomePage> {
       }
 
       setState(() {
-        _status = 'Sync done, +$added new';
+        _status = '${tr('同步完成', 'Sync done')}, +$added';
       });
     } catch (e) {
-      setState(() => _status = 'Sync failed: $e');
+      setState(() => _status = '${tr('同步失败', 'Sync failed')}: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -158,7 +162,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
       await _postJson(Uri.parse('$server/api/client/conversations/pin'), {
         'phone': phone,
         'pinned': pin,
-      });
+      }, password: widget.settings.password);
     } catch (_) {
       // ignore remote failure; local pin still works
     }
@@ -170,13 +174,13 @@ class _MessageHomePageState extends State<MessageHomePage> {
     final phone = _activePhone?.trim() ?? '';
     final content = _composerCtrl.text.trim();
     if (server.isEmpty || device.isEmpty || phone.isEmpty || content.isEmpty) {
-      setState(() => _status = 'Please configure server/device and choose conversation');
+      setState(() => _status = tr('请先配置服务器/设备并选择会话', 'Please configure server/device and choose conversation'));
       return;
     }
 
     setState(() {
       _loading = true;
-      _status = 'Sending...';
+      _status = tr('发送中...', 'Sending...');
     });
 
     try {
@@ -184,12 +188,12 @@ class _MessageHomePageState extends State<MessageHomePage> {
         'deviceId': device,
         'targetPhone': phone,
         'content': content,
-      });
+      }, password: widget.settings.password);
       _composerCtrl.clear();
       await _syncInbox();
-      setState(() => _status = 'Message queued');
+      setState(() => _status = tr('消息已进入队列', 'Message queued'));
     } catch (e) {
-      setState(() => _status = 'Send failed: $e');
+      setState(() => _status = '${tr('发送失败', 'Send failed')}: $e');
     } finally {
       setState(() => _loading = false);
     }
@@ -201,17 +205,17 @@ class _MessageHomePageState extends State<MessageHomePage> {
     final ok = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('New SMS'),
+        title: Text(tr('新短信', 'New SMS')),
         content: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            TextField(controller: phoneCtrl, decoration: const InputDecoration(labelText: 'Phone')),
-            TextField(controller: msgCtrl, decoration: const InputDecoration(labelText: 'Message'), maxLines: 3),
+            TextField(controller: phoneCtrl, decoration: InputDecoration(labelText: tr('号码', 'Phone'))),
+            TextField(controller: msgCtrl, decoration: InputDecoration(labelText: tr('内容', 'Message')), maxLines: 3),
           ],
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancel')),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: const Text('Send')),
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('取消', 'Cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('发送', 'Send'))),
         ],
       ),
     );
@@ -220,7 +224,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
     final phone = phoneCtrl.text.trim();
     final msg = msgCtrl.text.trim();
     if (phone.isEmpty || msg.isEmpty) {
-      setState(() => _status = 'Phone/content required');
+      setState(() => _status = tr('号码和内容不能为空', 'Phone/content required'));
       return;
     }
 
@@ -240,9 +244,12 @@ class _MessageHomePageState extends State<MessageHomePage> {
     return _db.getMessagesByPhone(phone);
   }
 
-  Future<String> _getJson(Uri url) async {
+  Future<String> _getJson(Uri url, {String? password}) async {
     final client = HttpClient();
     final req = await client.getUrl(url);
+    if ((password ?? '').trim().isNotEmpty) {
+      req.headers.set('X-Password', password!.trim());
+    }
     final resp = await req.close();
     final body = await utf8.decodeStream(resp);
     if (resp.statusCode < 200 || resp.statusCode >= 300) {
@@ -251,10 +258,13 @@ class _MessageHomePageState extends State<MessageHomePage> {
     return body;
   }
 
-  Future<void> _postJson(Uri url, Map<String, dynamic> data) async {
+  Future<void> _postJson(Uri url, Map<String, dynamic> data, {String? password}) async {
     final client = HttpClient();
     final req = await client.postUrl(url);
     req.headers.contentType = ContentType.json;
+    if ((password ?? '').trim().isNotEmpty) {
+      req.headers.set('X-Password', password!.trim());
+    }
     req.add(utf8.encode(jsonEncode(data)));
     final resp = await req.close();
     final body = await utf8.decodeStream(resp);
@@ -270,9 +280,9 @@ class _MessageHomePageState extends State<MessageHomePage> {
       appBar: AppBar(
         title: const Text('RemoteMessage'),
         actions: [
-          IconButton(onPressed: _loading ? null : _openSettings, icon: const Icon(Icons.settings), tooltip: 'Settings'),
-          IconButton(onPressed: _loading ? null : _createNewConversation, icon: const Icon(Icons.add_comment_outlined), tooltip: 'New SMS'),
-          IconButton(onPressed: _loading ? null : () => _syncInbox(), icon: const Icon(Icons.refresh), tooltip: 'Sync'),
+          IconButton(onPressed: _loading ? null : _openSettings, icon: const Icon(Icons.settings), tooltip: tr('设置', 'Settings')),
+          IconButton(onPressed: _loading ? null : _createNewConversation, icon: const Icon(Icons.add_comment_outlined), tooltip: tr('新短信', 'New SMS')),
+          IconButton(onPressed: _loading ? null : () => _syncInbox(), icon: const Icon(Icons.refresh), tooltip: tr('同步', 'Sync')),
         ],
       ),
       body: isMobile ? _buildMobileBody() : _buildDesktopBody(),
@@ -285,17 +295,18 @@ class _MessageHomePageState extends State<MessageHomePage> {
         Expanded(
           child: TextField(
             controller: _searchCtrl,
-            decoration: const InputDecoration(
-              labelText: 'Search conversation / message',
+            decoration: InputDecoration(
+              labelText: tr('搜索会话 / 内容', 'Search conversation / message'),
               prefixIcon: Icon(Icons.search),
-              border: OutlineInputBorder(),
+              border: const OutlineInputBorder(),
             ),
+            onTapOutside: (_) => FocusScope.of(context).unfocus(),
           ),
         ),
         const SizedBox(width: 8),
         FilledButton(
           onPressed: _loading ? null : () => _syncInbox(fullSync: true),
-          child: const Text('Load All'),
+          child: Text(tr('加载全部', 'Load All')),
         ),
       ],
     );
@@ -308,7 +319,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
         children: [
           _buildTopBar(),
           const SizedBox(height: 8),
-          Align(alignment: Alignment.centerLeft, child: Text('Status: $_status')),
+          Align(alignment: Alignment.centerLeft, child: Text('${tr('状态', 'Status')}: $_status')),
           const SizedBox(height: 8),
           Expanded(
             child: Row(
@@ -331,7 +342,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
         children: [
           _buildTopBar(),
           const SizedBox(height: 8),
-          Align(alignment: Alignment.centerLeft, child: Text('Status: $_status')),
+          Align(alignment: Alignment.centerLeft, child: Text('${tr('状态', 'Status')}: $_status')),
           const SizedBox(height: 8),
           Expanded(child: _buildConversationList(onMobileTap: true)),
         ],
@@ -345,7 +356,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
         future: _conversations(),
         builder: (context, snap) {
           final data = snap.data ?? const <ConversationSummary>[];
-          if (data.isEmpty) return const Center(child: Text('No conversations'));
+          if (data.isEmpty) return Center(child: Text(tr('暂无会话', 'No conversations')));
           return ListView.builder(
             itemCount: data.length,
             itemBuilder: (context, index) {
@@ -354,7 +365,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
               return ListTile(
                 selected: selected,
                 leading: c.pinned ? const Icon(Icons.push_pin, size: 18) : null,
-                title: Text(c.phone),
+                            title: Text(c.phone),
                 subtitle: Text(c.lastMessage.content, maxLines: 1, overflow: TextOverflow.ellipsis),
                 onTap: () async {
                   _activePhone = c.phone;
@@ -386,7 +397,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(12),
-            child: Text(_activePhone == null ? 'Select conversation' : 'Chat with $_activePhone'),
+            child: Text(_activePhone == null ? tr('请选择会话', 'Select conversation') : '${tr('聊天对象', 'Chat with')} $_activePhone'),
           ),
           const Divider(height: 1),
           Expanded(
@@ -394,7 +405,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
               future: _activeMessages(),
               builder: (context, snap) {
                 final messages = snap.data ?? const <SmsItem>[];
-                if (messages.isEmpty) return const Center(child: Text('No messages'));
+                if (messages.isEmpty) return Center(child: Text(tr('暂无消息', 'No messages')));
                 return ListView.builder(
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
@@ -438,11 +449,11 @@ class _MessageHomePageState extends State<MessageHomePage> {
                 Expanded(
                   child: TextField(
                     controller: _composerCtrl,
-                    decoration: const InputDecoration(hintText: 'Type a message...', border: OutlineInputBorder()),
+                    decoration: InputDecoration(hintText: tr('输入消息...', 'Type a message...'), border: const OutlineInputBorder()),
                   ),
                 ),
                 const SizedBox(width: 8),
-                FilledButton(onPressed: _loading ? null : _sendSmsToActive, child: const Text('Send')),
+                FilledButton(onPressed: _loading ? null : _sendSmsToActive, child: Text(tr('发送', 'Send'))),
               ],
             ),
           )
@@ -483,41 +494,52 @@ class SettingsPage extends StatefulWidget {
 class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _serverCtrl;
   late final TextEditingController _deviceCtrl;
+  late final TextEditingController _passwordCtrl;
   late ThemeMode _themeMode;
+
+  bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
+  String tr(String zh, String en) => _isZh ? zh : en;
 
   @override
   void initState() {
     super.initState();
     _serverCtrl = TextEditingController(text: widget.settings.serverBaseUrl);
     _deviceCtrl = TextEditingController(text: widget.settings.deviceId);
+    _passwordCtrl = TextEditingController(text: widget.settings.password);
     _themeMode = widget.settings.themeMode;
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(title: const Text('Settings')),
+      appBar: AppBar(title: Text(tr('设置', 'Settings'))),
       body: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
           children: [
             TextField(
               controller: _serverCtrl,
-              decoration: const InputDecoration(labelText: 'Server Base URL', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: tr('服务器地址', 'Server Base URL'), border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _deviceCtrl,
-              decoration: const InputDecoration(labelText: 'Device ID', border: OutlineInputBorder()),
+              decoration: InputDecoration(labelText: tr('设备 ID', 'Device ID'), border: const OutlineInputBorder()),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _passwordCtrl,
+              obscureText: true,
+              decoration: InputDecoration(labelText: tr('密码', 'Password'), border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<ThemeMode>(
               value: _themeMode,
-              decoration: const InputDecoration(labelText: 'Theme', border: OutlineInputBorder()),
-              items: const [
-                DropdownMenuItem(value: ThemeMode.system, child: Text('System')),
-                DropdownMenuItem(value: ThemeMode.light, child: Text('Light')),
-                DropdownMenuItem(value: ThemeMode.dark, child: Text('Dark')),
+              decoration: InputDecoration(labelText: tr('主题', 'Theme'), border: const OutlineInputBorder()),
+              items: [
+                DropdownMenuItem(value: ThemeMode.system, child: Text(tr('跟随系统', 'System'))),
+                DropdownMenuItem(value: ThemeMode.light, child: Text(tr('浅色', 'Light'))),
+                DropdownMenuItem(value: ThemeMode.dark, child: Text(tr('深色', 'Dark'))),
               ],
               onChanged: (v) => setState(() => _themeMode = v ?? ThemeMode.system),
             ),
@@ -526,6 +548,7 @@ class _SettingsPageState extends State<SettingsPage> {
               onPressed: () async {
                 widget.settings.serverBaseUrl = _serverCtrl.text.trim();
                 widget.settings.deviceId = _deviceCtrl.text.trim();
+                widget.settings.password = _passwordCtrl.text.trim();
                 widget.settings.themeMode = _themeMode;
                 await widget.settings.save();
                 if (!mounted) return;
@@ -534,12 +557,13 @@ class _SettingsPageState extends State<SettingsPage> {
                   SettingsResult(
                     serverBaseUrl: widget.settings.serverBaseUrl,
                     deviceId: widget.settings.deviceId,
+                    password: widget.settings.password,
                     themeMode: _themeMode,
                   ),
                 );
               },
               icon: const Icon(Icons.save),
-              label: const Text('Save'),
+              label: Text(tr('保存', 'Save')),
             )
           ],
         ),
@@ -551,13 +575,15 @@ class _SettingsPageState extends State<SettingsPage> {
 class SettingsResult {
   final String serverBaseUrl;
   final String deviceId;
+  final String password;
   final ThemeMode themeMode;
-  SettingsResult({required this.serverBaseUrl, required this.deviceId, required this.themeMode});
+  SettingsResult({required this.serverBaseUrl, required this.deviceId, required this.password, required this.themeMode});
 }
 
 class AppSettingsStore {
   String serverBaseUrl = 'http://127.0.0.1:5000';
   String deviceId = 'android-arm64-gateway';
+  String password = '';
   ThemeMode themeMode = ThemeMode.system;
 
   sqlite.Database? _db;
@@ -567,6 +593,7 @@ class AppSettingsStore {
     _ensureSchema(db);
     serverBaseUrl = _read(db, 'serverBaseUrl') ?? serverBaseUrl;
     deviceId = _read(db, 'deviceId') ?? deviceId;
+    password = _read(db, 'password') ?? password;
     themeMode = _parseThemeMode(_read(db, 'themeMode') ?? 'system');
   }
 
@@ -575,6 +602,7 @@ class AppSettingsStore {
     _ensureSchema(db);
     _write(db, 'serverBaseUrl', serverBaseUrl);
     _write(db, 'deviceId', deviceId);
+    _write(db, 'password', password);
     _write(db, 'themeMode', themeMode.name);
   }
 

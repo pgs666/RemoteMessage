@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
         val editDeviceId = findViewById<EditText>(R.id.editDeviceId)
         val editSimSubId = findViewById<EditText>(R.id.editSimSubId)
         val editApiKey = findViewById<EditText>(R.id.editApiKey)
+        val editWebUiPort = findViewById<EditText>(R.id.editWebUiPort)
         val textStatus = findViewById<TextView>(R.id.textStatus)
         val btnSave = findViewById<Button>(R.id.btnSave)
         val btnRegister = findViewById<Button>(R.id.btnRegister)
@@ -39,26 +40,49 @@ class MainActivity : ComponentActivity() {
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
         editSimSubId.setText(pref.getString("sim_sub_id", "") ?: "")
         editApiKey.setText(pref.getString("api_key", "") ?: "")
+        editWebUiPort.setText(pref.getString("webui_port", "8088") ?: "8088")
 
-        RuntimeConfig.apiKey = editApiKey.text.toString().trim().ifBlank { null }
+        RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
 
         requestPermissionsIfNeeded()
         PermissionAndRoleHelper.requestDefaultSmsRole(this)
         PermissionAndRoleHelper.requestIgnoreBatteryOptimizations(this)
         PermissionAndRoleHelper.openUsageAccessSettings(this)
         GatewaySyncWorker.schedule(this)
-        startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, textStatus)
+        startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, editWebUiPort, textStatus)
 
         btnSave.setOnClickListener {
+            val serverText = editServer.text.toString().trim()
+            val deviceIdText = editDeviceId.text.toString().trim()
+            val passwordText = editApiKey.text.toString().trim()
+            val port = editWebUiPort.text.toString().trim().toIntOrNull()
+            if (serverText.isBlank()) {
+                textStatus.text = getString(R.string.status_invalid_server)
+                return@setOnClickListener
+            }
+            if (deviceIdText.isBlank()) {
+                textStatus.text = getString(R.string.status_invalid_device)
+                return@setOnClickListener
+            }
+            if (passwordText.isBlank()) {
+                textStatus.text = getString(R.string.status_invalid_password)
+                return@setOnClickListener
+            }
+            if (port == null || port !in 1024..65535) {
+                textStatus.text = getString(R.string.status_invalid_port)
+                return@setOnClickListener
+            }
+
             pref.edit()
-                .putString("server_base", editServer.text.toString().trim())
-                .putString("device_id", editDeviceId.text.toString().trim())
+                .putString("server_base", serverText)
+                .putString("device_id", deviceIdText)
                 .putString("sim_sub_id", editSimSubId.text.toString().trim())
-                .putString("api_key", editApiKey.text.toString().trim())
+                .putString("api_key", passwordText)
+                .putString("webui_port", port.toString())
                 .apply()
-            RuntimeConfig.apiKey = editApiKey.text.toString().trim().ifBlank { null }
+            RuntimeConfig.password = passwordText
             GatewaySyncWorker.schedule(this)
-            restartWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, textStatus)
+            restartWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, editWebUiPort, textStatus)
             textStatus.text = getString(R.string.status_saved_auto_sync)
         }
 
@@ -114,11 +138,14 @@ class MainActivity : ComponentActivity() {
         editDeviceId: EditText,
         editSimSubId: EditText,
         editApiKey: EditText,
+        editWebUiPort: EditText,
         textStatus: TextView
     ) {
         if (webUiServer != null) return
+        val port = editWebUiPort.text.toString().trim().toIntOrNull()?.takeIf { it in 1024..65535 } ?: 8088
         webUiServer = GatewayWebUiServer(
             context = this,
+            port = port,
             readConfig = {
                 GatewayConfig(
                     serverBaseUrl = editServer.text.toString().trim(),
@@ -127,7 +154,7 @@ class MainActivity : ComponentActivity() {
                 )
             },
             onAction = { action ->
-                RuntimeConfig.apiKey = editApiKey.text.toString().trim().ifBlank { null }
+                RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
                 val cfg = GatewayConfig(
                     serverBaseUrl = editServer.text.toString().trim(),
                     deviceId = editDeviceId.text.toString().trim(),
@@ -167,7 +194,7 @@ class MainActivity : ComponentActivity() {
 
         runCatching {
             webUiServer?.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
-            textStatus.text = getString(R.string.status_webui_lan)
+            textStatus.text = getString(R.string.status_webui_lan, port)
         }.onFailure {
             textStatus.text = getString(R.string.status_webui_failed, it.message ?: "unknown")
         }
@@ -178,11 +205,12 @@ class MainActivity : ComponentActivity() {
         editDeviceId: EditText,
         editSimSubId: EditText,
         editApiKey: EditText,
+        editWebUiPort: EditText,
         textStatus: TextView
     ) {
         webUiServer?.stop()
         webUiServer = null
-        startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, textStatus)
+        startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, editWebUiPort, textStatus)
     }
 
     override fun onDestroy() {

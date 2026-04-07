@@ -5,6 +5,8 @@
     <string name="hint_device_id">Device ID</string>
     <string name="hint_sim_sub_id">SIM Subscription ID (optional)</string>
     <string name="hint_api_key">API Key</string>
+    <string name="hint_password">Password</string>
+    <string name="hint_webui_port">Web UI Port (1024-65535)</string>
     <string name="btn_save">Save</string>
     <string name="btn_register">Register</string>
     <string name="btn_poll_once">Poll Once</string>
@@ -13,6 +15,10 @@
     <string name="status_ready">Ready</string>
     <string name="status_saved_auto_sync">Saved + Auto Sync scheduled</string>
     <string name="status_pending_flushed">Pending uploads flushed</string>
-    <string name="status_webui_lan">WebUI on LAN: http://&lt;phone-ip&gt;:8088</string>
+    <string name="status_webui_lan">WebUI on LAN: http://&lt;phone-ip&gt;:%1$d</string>
     <string name="status_webui_failed">WebUI start failed: %1$s</string>
+    <string name="status_invalid_server">Please input valid server address</string>
+    <string name="status_invalid_device">Please input valid device id</string>
+    <string name="status_invalid_password">Please input password</string>
+    <string name="status_invalid_port">Port must be 1024-65535</string>
 </resources>

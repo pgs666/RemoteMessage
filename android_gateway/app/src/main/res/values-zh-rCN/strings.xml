@@ -5,6 +5,8 @@
     <string name="hint_device_id">设备 ID</string>
     <string name="hint_sim_sub_id">SIM 子卡 ID（可选）</string>
     <string name="hint_api_key">API 密钥</string>
+    <string name="hint_password">密码</string>
+    <string name="hint_webui_port">Web UI 端口（1024-65535）</string>
     <string name="btn_save">保存</string>
     <string name="btn_register">注册</string>
     <string name="btn_poll_once">轮询一次</string>
@@ -13,6 +15,10 @@
     <string name="status_ready">就绪</string>
     <string name="status_saved_auto_sync">已保存并启用自动同步</string>
     <string name="status_pending_flushed">待上传队列已补传</string>
-    <string name="status_webui_lan">内网 WebUI： http://&lt;手机IP&gt;:8088</string>
+    <string name="status_webui_lan">内网 WebUI： http://&lt;手机IP&gt;:%1$d</string>
     <string name="status_webui_failed">WebUI 启动失败：%1$s</string>
+    <string name="status_invalid_server">请输入有效服务器地址</string>
+    <string name="status_invalid_device">请输入有效设备 ID</string>
+    <string name="status_invalid_password">请输入密码</string>
+    <string name="status_invalid_port">端口必须在 1024-65535 之间</string>
 </resources>

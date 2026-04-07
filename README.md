@@ -58,7 +58,8 @@
   - 内网 WebUI（端口 8088，仅 LAN/本机访问）
   - 双卡可选发送（Subscription ID）
 - 中间服务器增强：
-  - API Key 鉴权（`X-Api-Key`，环境变量 `REMOTE_MESSAGE_API_KEY`）
+  - 密码鉴权（`X-Password`）
+  - 同目录自动生成 / 读取 `password.conf`
   - SQLite 持久化 gateway 注册信息
   - API 访问日志持久化
 
@@ -155,7 +156,7 @@ gh repo create RemoteMessage --public --source . --remote origin --push
   - 下行任务使用网关公钥加密并供网关拉取
   - `messageId` 去重与 `sinceTs` 增量查询
   - 会话置顶持久化接口
-  - `X-Api-Key` 鉴权 + request 日志
+  - `password.conf` + `X-Password` 鉴权 + request 日志
   - gateway 公钥持久化表（重启后不丢失）
 - ✅ CI 已通过 Linux x64/arm64 发布流程
 - ⚠️ 生产前仍需完善：持久化存储、鉴权、审计日志、限流与告警
@@ -174,3 +175,18 @@ gh repo create RemoteMessage --public --source . --remote origin --push
 1. Android 真机短信权限和后台保活策略会影响收发可靠性。
 2. iOS 构建在 CI 中使用 `--no-codesign`，仅用于验证编译通过。
 3. 当前服务端使用内存队列，生产环境建议替换为 Redis / MQ + 数据库存储。
+
+---
+
+## 密码验证
+
+- 服务端首次运行会在同目录自动创建 `password.conf`
+- 默认格式：
+
+```ini
+# RemoteMessage password.conf
+password=your-password-here
+```
+
+- 客户端与网关端需要配置相同密码，所有受保护接口通过请求头 `X-Password` 传递
+- 若密码错误，服务端将返回 `401 invalid password`

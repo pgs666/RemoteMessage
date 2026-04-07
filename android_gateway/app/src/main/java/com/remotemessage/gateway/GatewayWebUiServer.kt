@@ -5,9 +5,10 @@ import fi.iki.elonen.NanoHTTPD
 
 class GatewayWebUiServer(
     context: Context,
+    port: Int,
     private val readConfig: () -> GatewayConfig,
     private val onAction: (String) -> String
-) : NanoHTTPD("0.0.0.0", 8088) {
+) : NanoHTTPD("0.0.0.0", port) {
 
     @Suppress("unused")
     private val appContext = context.applicationContext
@@ -25,18 +26,27 @@ class GatewayWebUiServer(
         }
 
         val cfg = readConfig()
+        val isZh = session.headers["accept-language"]?.contains("zh", ignoreCase = true) == true
+        val title = if (isZh) "RemoteMessage 网关" else "RemoteMessage Gateway"
+        val serverLabel = if (isZh) "服务器" else "Server"
+        val deviceLabel = if (isZh) "设备" else "Device"
+        val simLabel = if (isZh) "SIM 子卡" else "SIM SubId"
+        val registerText = if (isZh) "注册" else "Register"
+        val pollText = if (isZh) "轮询一次" else "Poll Once"
+        val syncText = if (isZh) "同步历史短信" else "Sync History"
+        val flushText = if (isZh) "补传待发送队列" else "Flush Pending"
         val html = """
             <html><head><meta name='viewport' content='width=device-width,initial-scale=1' />
-            <title>RemoteMessage Gateway</title></head>
+            <title>$title</title></head>
             <body style='font-family: sans-serif; margin: 16px;'>
-              <h2>RemoteMessage Gateway</h2>
-              <p>Server: ${cfg.serverBaseUrl}</p>
-              <p>Device: ${cfg.deviceId}</p>
-              <p>SIM SubId: ${cfg.simSubId ?: "default"}</p>
-              <button onclick="doAct('register')">Register</button>
-              <button onclick="doAct('poll')">Poll Once</button>
-              <button onclick="doAct('syncHistory')">Sync History</button>
-              <button onclick="doAct('flushPending')">Flush Pending</button>
+              <h2>$title</h2>
+              <p>$serverLabel: ${cfg.serverBaseUrl}</p>
+              <p>$deviceLabel: ${cfg.deviceId}</p>
+              <p>$simLabel: ${cfg.simSubId ?: if (isZh) "默认" else "default"}</p>
+              <button onclick="doAct('register')">$registerText</button>
+              <button onclick="doAct('poll')">$pollText</button>
+              <button onclick="doAct('syncHistory')">$syncText</button>
+              <button onclick="doAct('flushPending')">$flushText</button>
               <pre id='out'></pre>
               <script>
                 async function doAct(name){
