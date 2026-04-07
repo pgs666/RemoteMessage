@@ -47,22 +47,19 @@
 
 ---
 
-## 本地初始化 Git 与推送到 GitHub
+## GitHub 仓库状态（已创建并推送）
 
-> 由于当前环境无法直接使用你的 GitHub 账号创建远程仓库，请在本地执行以下命令：
+- 仓库地址：`https://github.com/pgs666/RemoteMessage`
+- 默认分支：`main`
+- 首次初始化提交：`feat: bootstrap RemoteMessage mono-repo with client/gateway/server and CI`
+
+如需在其他环境复现，可参考命令：
 
 ```bash
 git init
 git add .
-git commit -m "feat: bootstrap RemoteMessage mono-repo with 3 projects and CI"
+git commit -m "feat: bootstrap RemoteMessage mono-repo with client/gateway/server and CI"
 git branch -M main
-git remote add origin https://github.com/<你的用户名>/RemoteMessage.git
-git push -u origin main
-```
-
-如果你安装并登录了 GitHub CLI，也可直接创建仓库：
-
-```bash
 gh repo create RemoteMessage --public --source . --remote origin --push
 ```
 
@@ -77,6 +74,56 @@ gh repo create RemoteMessage --public --source . --remote origin --push
   - 构建原生 Android 网关 APK
 - `middle-server.yml`
   - `dotnet publish` 输出 Linux x64 与 Linux ARM64 产物
+
+### 最近一次运行状态（当前）
+
+- `middle-server-ci`：✅ success  
+  - 运行链接：`https://github.com/pgs666/RemoteMessage/actions/runs/24058464579`
+- `android-gateway-ci`：❌ failure（已定位并修复）  
+  - 运行链接：`https://github.com/pgs666/RemoteMessage/actions/runs/24058464595`
+  - 原因：缺少 `android.useAndroidX=true`
+  - 修复：已新增 `android_gateway/gradle.properties`
+- `flutter-client-ci`：⏳ in_progress  
+  - 运行链接：`https://github.com/pgs666/RemoteMessage/actions/runs/24058464587`
+
+---
+
+## 功能完善度验证（按目标需求）
+
+### 1) Flutter 客户端（Windows / Android / iOS / Linux）
+
+- ✅ 已实现基础功能：
+  - 配置服务器地址与网关设备 ID
+  - 拉取短信收件箱（`/api/client/inbox`）
+  - 提交发信任务（`/api/client/send`）
+- ⚠️ 当前状态：**MVP 骨架**（UI 与接口联通优先）
+- 🔧 后续建议：离线缓存、登录鉴权、消息状态回执、端到端加密会话管理
+
+### 2) Android 原生网关（ARM64）
+
+- ✅ 已实现基础功能：
+  - 接收系统 SMS 广播并上报服务器
+  - 轮询服务器拉取待发送任务并调用 `SmsManager` 发送
+  - 本地生成 RSA 密钥对、向服务器注册公钥
+- ✅ CI 失败点已修复：AndroidX 配置已补齐
+- ⚠️ 生产前仍需完善：前台服务保活、重试队列、双卡支持、权限引导细化
+
+### 3) Middle Server（.NET 8，Linux x64 / ARM64）
+
+- ✅ 已实现基础功能：
+  - 服务器公钥下发
+  - 网关注册与公钥保存
+  - 上行短信解密入库（内存队列）
+  - 下行任务使用网关公钥加密并供网关拉取
+- ✅ CI 已通过 Linux x64/arm64 发布流程
+- ⚠️ 生产前仍需完善：持久化存储、鉴权、审计日志、限流与告警
+
+### 4) 非对称加密（安全性）
+
+- ✅ 已落地 RSA OAEP-SHA256 基础流程：
+  - 网关 -> 服务器：使用服务器公钥加密上行短信
+  - 服务器 -> 网关：使用网关公钥加密下行指令
+- ⚠️ 仍建议增强：密钥轮换、设备吊销、签名验签、防重放 nonce/timestamp
 
 ---
 
