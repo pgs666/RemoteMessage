@@ -16,6 +16,7 @@ import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.PublicKey
+import java.security.Security
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.security.cert.CertificateFactory
@@ -293,13 +294,31 @@ object GatewayRuntime {
             return pub to pri
         }
 
-        val kpg = KeyPairGenerator.getInstance("RSA")
+        val kpg = createSoftwareRsaKeyPairGenerator()
         kpg.initialize(2048)
         val pair = kpg.generateKeyPair()
         val pubPem = toPem("PUBLIC KEY", pair.public.encoded)
         val priPem = toPem("PRIVATE KEY", pair.private.encoded)
         pref.edit().putString(KEY_PUBLIC, pubPem).putString(KEY_PRIVATE, priPem).apply()
         return pubPem to priPem
+    }
+
+    private fun createSoftwareRsaKeyPairGenerator(): KeyPairGenerator {
+        val preferredProviders = linkedSetOf("BC", "AndroidOpenSSL", "Conscrypt")
+        preferredProviders.forEach { providerName ->
+            runCatching {
+                return KeyPairGenerator.getInstance("RSA", providerName)
+            }
+        }
+
+        Security.getProviders().forEach { provider ->
+            if (provider.name.equals("AndroidKeyStore", ignoreCase = true)) return@forEach
+            runCatching {
+                return KeyPairGenerator.getInstance("RSA", provider)
+            }
+        }
+
+        return KeyPairGenerator.getInstance("RSA")
     }
 
     private fun encryptByPublicKey(publicPem: String, plain: String): String {
