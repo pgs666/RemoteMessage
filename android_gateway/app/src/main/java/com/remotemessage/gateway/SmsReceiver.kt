@@ -7,7 +7,8 @@ import android.provider.Telephony
 
 class SmsReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION) return
+        val action = intent.action
+        if (action != Telephony.Sms.Intents.SMS_RECEIVED_ACTION && action != Telephony.Sms.Intents.SMS_DELIVER_ACTION) return
 
         val prefs = context.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
         val server = prefs.getString("server_base", "") ?: ""

@@ -196,7 +196,7 @@ public sealed class CryptoState
 
     public CryptoState()
     {
-        ServerPublicKeyPem = _serverRsa.ExportRSAPublicKeyPem();
+        ServerPublicKeyPem = _serverRsa.ExportSubjectPublicKeyInfoPem();
     }
 
     public string DecryptWithServerPrivateKey(string encryptedBase64)

@@ -318,9 +318,13 @@ object GatewayRuntime {
     }
 
     private fun loadPublicKey(publicPem: String): PublicKey {
-        val bytes = Base64.getDecoder().decode(publicPem.pemBody())
-        val spec = X509EncodedKeySpec(bytes)
-        return KeyFactory.getInstance("RSA").generatePublic(spec)
+        val bytes = Base64.getMimeDecoder().decode(publicPem.pemBody())
+        val keyFactory = KeyFactory.getInstance("RSA")
+        return runCatching {
+            keyFactory.generatePublic(X509EncodedKeySpec(bytes))
+        }.getOrElse {
+            keyFactory.generatePublic(X509EncodedKeySpec(wrapPkcs1PublicKey(bytes)))
+        }
     }
 
     private fun loadPrivateKey(privatePem: String): PrivateKey {
@@ -338,10 +342,37 @@ object GatewayRuntime {
         return this
             .replace("-----BEGIN PUBLIC KEY-----", "")
             .replace("-----END PUBLIC KEY-----", "")
+            .replace("-----BEGIN RSA PUBLIC KEY-----", "")
+            .replace("-----END RSA PUBLIC KEY-----", "")
             .replace("-----BEGIN PRIVATE KEY-----", "")
             .replace("-----END PRIVATE KEY-----", "")
+            .replace("\r", "")
             .replace("\n", "")
             .trim()
+    }
+
+    private fun wrapPkcs1PublicKey(pkcs1: ByteArray): ByteArray {
+        val rsaAlgorithmIdentifier = byteArrayOf(
+            0x30, 0x0D,
+            0x06, 0x09,
+            0x2A, 0x86.toByte(), 0x48, 0x86.toByte(), 0xF7.toByte(), 0x0D, 0x01, 0x01, 0x01,
+            0x05, 0x00
+        )
+        val bitString = derEncode(0x03, byteArrayOf(0x00) + pkcs1)
+        return derEncode(0x30, rsaAlgorithmIdentifier + bitString)
+    }
+
+    private fun derEncode(tag: Int, content: ByteArray): ByteArray {
+        return byteArrayOf(tag.toByte()) + derLength(content.size) + content
+    }
+
+    private fun derLength(length: Int): ByteArray {
+        return when {
+            length < 0x80 -> byteArrayOf(length.toByte())
+            length <= 0xFF -> byteArrayOf(0x81.toByte(), length.toByte())
+            length <= 0xFFFF -> byteArrayOf(0x82.toByte(), (length shr 8).toByte(), length.toByte())
+            else -> throw IllegalArgumentException("length too large")
+        }
     }
 }
 

@@ -3,6 +3,18 @@ plugins {
     id 'org.jetbrains.kotlin.android'
 }
 
+def ciVersionCode = (System.getenv('ANDROID_GATEWAY_VERSION_CODE') ?: '1').toInteger()
+def ciVersionName = System.getenv('ANDROID_GATEWAY_VERSION_NAME') ?: "1.0.${ciVersionCode}"
+def ciSigningReady = [
+    'ANDROID_KEYSTORE_PATH',
+    'ANDROID_KEY_ALIAS',
+    'ANDROID_KEYSTORE_PASSWORD',
+    'ANDROID_KEY_PASSWORD'
+].every { key ->
+    def value = System.getenv(key)
+    value != null && !value.trim().isEmpty()
+}
+
 android {
     namespace 'com.remotemessage.gateway'
     compileSdk 34
@@ -11,16 +23,36 @@ android {
         applicationId "com.remotemessage.gateway"
         minSdk 26
         targetSdk 34
-        versionCode 1
-        versionName "1.0.0"
+        versionCode ciVersionCode
+        versionName ciVersionName
 
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    signingConfigs {
+        if (ciSigningReady) {
+            ci {
+                storeFile file(System.getenv('ANDROID_KEYSTORE_PATH'))
+                storePassword System.getenv('ANDROID_KEYSTORE_PASSWORD')
+                keyAlias System.getenv('ANDROID_KEY_ALIAS')
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
+
     buildTypes {
+        debug {
+            if (ciSigningReady) {
+                signingConfig signingConfigs.ci
+            }
+        }
+
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (ciSigningReady) {
+                signingConfig signingConfigs.ci
+            }
         }
     }
 

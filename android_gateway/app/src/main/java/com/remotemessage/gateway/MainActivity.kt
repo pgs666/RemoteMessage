@@ -55,6 +55,7 @@ class MainActivity : ComponentActivity() {
         val btnSyncHistory = findViewById<Button>(R.id.btnSyncHistory)
         val btnFlushPending = findViewById<Button>(R.id.btnFlushPending)
         val btnImportCert = findViewById<Button>(R.id.btnImportCert)
+        val btnRequestSmsRole = findViewById<Button>(R.id.btnRequestSmsRole)
         statusTextView = textStatus
 
         editServer.setText(pref.getString("server_base", "https://10.0.2.2:5001") ?: "")
@@ -155,6 +156,15 @@ class MainActivity : ComponentActivity() {
 
         btnImportCert.setOnClickListener {
             importCertLauncher.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "*/*"))
+        }
+
+        btnRequestSmsRole.setOnClickListener {
+            PermissionAndRoleHelper.requestDefaultSmsRole(this)
+            textStatus.text = if (PermissionAndRoleHelper.isDefaultSmsApp(this)) {
+                getString(R.string.status_sms_role_held)
+            } else {
+                getString(R.string.status_sms_role_requested)
+            }
         }
     }
 

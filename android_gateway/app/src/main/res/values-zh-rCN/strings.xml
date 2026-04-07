@@ -13,6 +13,7 @@
     <string name="btn_sync_history">同步历史短信</string>
     <string name="btn_flush_pending">补传待发送队列</string>
     <string name="btn_import_cert">导入服务器证书</string>
+    <string name="btn_request_sms_role">申请默认短信应用</string>
     <string name="status_ready">就绪</string>
     <string name="status_saved_auto_sync">已保存并启用自动同步</string>
     <string name="status_pending_flushed">待上传队列已补传</string>
@@ -24,4 +25,6 @@
     <string name="status_invalid_port">端口必须在 1024-65535 之间</string>
     <string name="status_cert_imported">证书已导入</string>
     <string name="status_cert_import_failed">证书导入失败：%1$s</string>
+    <string name="status_sms_role_requested">已发起默认短信应用申请，请在系统弹窗中确认。</string>
+    <string name="status_sms_role_held">当前应用已经是默认短信应用。</string>
 </resources>

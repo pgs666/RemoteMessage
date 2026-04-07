@@ -10,7 +10,20 @@ import android.provider.Telephony
 import android.provider.Settings
 
 object PermissionAndRoleHelper {
+    fun isDefaultSmsApp(context: Context): Boolean {
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val roleManager = context.getSystemService(android.app.role.RoleManager::class.java)
+            roleManager != null &&
+                roleManager.isRoleAvailable(android.app.role.RoleManager.ROLE_SMS) &&
+                roleManager.isRoleHeld(android.app.role.RoleManager.ROLE_SMS)
+        } else {
+            Telephony.Sms.getDefaultSmsPackage(context) == context.packageName
+        }
+    }
+
     fun requestDefaultSmsRole(activity: Activity) {
+        if (isDefaultSmsApp(activity)) return
+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val roleManager = activity.getSystemService(android.app.role.RoleManager::class.java)
             if (roleManager != null && roleManager.isRoleAvailable(android.app.role.RoleManager.ROLE_SMS) && !roleManager.isRoleHeld(android.app.role.RoleManager.ROLE_SMS)) {

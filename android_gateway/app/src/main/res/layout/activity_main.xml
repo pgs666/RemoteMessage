@@ -95,6 +95,13 @@
             android:layout_marginTop="8dp"
             android:text="@string/btn_import_cert" />
 
+        <Button
+            android:id="@+id/btnRequestSmsRole"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/btn_request_sms_role" />
+
         <TextView
             android:id="@+id/textStatus"
             android:layout_width="match_parent"

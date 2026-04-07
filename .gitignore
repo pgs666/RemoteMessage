@@ -18,10 +18,14 @@ Thumbs.db
 **/.gradle/
 **/local.properties
 **/captures/
+android_gateway/signing/
 
 # .NET
 **/bin/
 **/obj/
+
+# Local artifacts
+artifacts/
 
 # Secrets
 *.keystore
