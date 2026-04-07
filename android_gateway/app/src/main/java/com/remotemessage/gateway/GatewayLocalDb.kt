@@ -14,6 +14,14 @@ data class PendingUpload(
     val messageId: String?
 )
 
+data class PendingUploadInput(
+    val phone: String,
+    val content: String,
+    val timestamp: Long,
+    val direction: String,
+    val messageId: String?
+)
+
 class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_private.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
@@ -44,6 +52,28 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
             put("message_id", messageId)
         }
         writableDatabase.insertWithOnConflict("pending_uploads", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+    }
+
+    fun enqueueUploads(items: List<PendingUploadInput>) {
+        if (items.isEmpty()) return
+
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            items.forEach { item ->
+                val values = ContentValues().apply {
+                    put("phone", item.phone)
+                    put("content", item.content)
+                    put("timestamp", item.timestamp)
+                    put("direction", item.direction)
+                    put("message_id", item.messageId)
+                }
+                db.insertWithOnConflict("pending_uploads", null, values, SQLiteDatabase.CONFLICT_IGNORE)
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
     }
 
     fun listPending(limit: Int = 200): List<PendingUpload> {
@@ -83,6 +113,28 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
 
     fun deletePending(id: Long) {
         writableDatabase.delete("pending_uploads", "id=?", arrayOf(id.toString()))
+    }
+
+    fun deletePending(ids: List<Long>) {
+        if (ids.isEmpty()) return
+
+        val db = writableDatabase
+        db.beginTransaction()
+        try {
+            ids.forEach { id ->
+                db.delete("pending_uploads", "id=?", arrayOf(id.toString()))
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+    }
+
+    fun countPending(): Int {
+        val cursor = readableDatabase.rawQuery("SELECT COUNT(1) FROM pending_uploads", null)
+        cursor.use {
+            return if (it.moveToFirst()) it.getInt(0) else 0
+        }
     }
 
     private fun ensureIndexes(db: SQLiteDatabase) {

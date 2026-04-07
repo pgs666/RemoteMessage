@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.animation.LinearInterpolator
 import android.view.View
 import android.widget.Button
 import android.widget.EditText
@@ -28,6 +29,8 @@ class MainActivity : ComponentActivity() {
     private var syncProgressBar: ProgressBar? = null
     private val realtimeSyncHandler = Handler(Looper.getMainLooper())
     private var realtimeSyncRunnable: Runnable? = null
+    private val syncAnimHandler = Handler(Looper.getMainLooper())
+    private var syncAnimRunnable: Runnable? = null
 
     @Volatile
     private var realtimeSyncBusy = false
@@ -164,7 +167,7 @@ class MainActivity : ComponentActivity() {
             GatewayRuntime.syncHistoricalSms(this, cfg, onProgress = { processed, total ->
                 runOnUiThread {
                     if (total > 0) {
-                        showProgress(indeterminate = false, progress = processed, max = total)
+                        showProgress(indeterminate = false, progress = processed, max = total, animate = true)
                         textStatus.text = getString(R.string.status_history_sync_progress, processed, total)
                     } else {
                         showProgress(indeterminate = true)
@@ -344,21 +347,77 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showProgress(indeterminate: Boolean, progress: Int = 0, max: Int = 100) {
+        showProgress(indeterminate, progress, max, animate = false)
+    }
+
+    private fun showProgress(indeterminate: Boolean, progress: Int = 0, max: Int = 100, animate: Boolean = false) {
         syncProgressBar?.apply {
             visibility = View.VISIBLE
             isIndeterminate = indeterminate
             if (!indeterminate) {
                 this.max = max.coerceAtLeast(1)
-                this.progress = progress.coerceIn(0, this.max)
+                val target = progress.coerceIn(0, this.max)
+                if (animate && Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    setProgress(target, true)
+                } else {
+                    this.progress = target
+                }
             }
+        }
+
+        if (indeterminate) {
+            startProgressPulse()
+        } else {
+            stopProgressPulse()
         }
     }
 
     private fun hideProgress() {
+        stopProgressPulse()
         syncProgressBar?.visibility = View.GONE
     }
 
+    private fun startProgressPulse() {
+        if (syncAnimRunnable != null) return
+        val bar = syncProgressBar ?: return
+        bar.isIndeterminate = false
+        bar.max = 100
+        val runnable = object : Runnable {
+            private var value = 0
+            private var direction = 1
+
+            override fun run() {
+                val progressBar = syncProgressBar ?: return
+                if (progressBar.visibility != View.VISIBLE) return
+                value += 8 * direction
+                if (value >= 90) {
+                    value = 90
+                    direction = -1
+                } else if (value <= 10) {
+                    value = 10
+                    direction = 1
+                }
+
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                    progressBar.setProgress(value, true)
+                } else {
+                    progressBar.progress = value
+                }
+                syncAnimHandler.postDelayed(this, 120)
+            }
+        }
+        syncAnimRunnable = runnable
+        bar.interpolator = LinearInterpolator()
+        syncAnimHandler.post(runnable)
+    }
+
+    private fun stopProgressPulse() {
+        syncAnimRunnable?.let { syncAnimHandler.removeCallbacks(it) }
+        syncAnimRunnable = null
+    }
+
     override fun onDestroy() {
+        stopProgressPulse()
         stopRealtimeSyncLoop()
         webUiServer?.stop()
         webUiServer = null

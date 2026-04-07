@@ -15,6 +15,7 @@ var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 256 * 1024;
+    options.Limits.Http2.MaxStreamsPerConnection = 100;
     options.Listen(IPAddress.Any, serverSettings.HttpsPort, listen => listen.UseHttps(httpsSettings.Certificate));
 });
 builder.Services.AddSingleton<CryptoState>();
@@ -22,6 +23,10 @@ builder.Services.AddSingleton<GatewayRegistry>();
 builder.Services.AddSingleton<SqliteRepository>();
 builder.Services.AddSingleton(serverSettings);
 builder.Services.AddSingleton(httpsSettings);
+builder.Services.ConfigureHttpJsonOptions(options =>
+{
+    options.SerializerOptions.DefaultBufferSize = 16 * 1024;
+});
 
 var app = builder.Build();
 var startupRepo = app.Services.GetRequiredService<SqliteRepository>();
@@ -97,6 +102,7 @@ app.MapPost("/api/gateway/sms/upload", (UploadSmsRequest req, CryptoState crypto
     {
         var plain = crypto.DecryptWithServerPrivateKey(req.EncryptedPayloadBase64);
         var payload = JsonSerializer.Deserialize<GatewaySmsPayload>(plain, jsonOptions);
+        plain = string.Empty;
         if (payload is null)
         {
             return Results.BadRequest("invalid payload");
@@ -403,7 +409,12 @@ public sealed class CryptoState
             return Encoding.UTF8.GetString(plain);
         }
 
-        using var output = new MemoryStream();
+        var estimatedCapacity = encryptedBase64.Count(x => x == '.') switch
+        {
+            < 1 => 1024,
+            var dotCount => Math.Min((dotCount + 1) * 190, 256 * 1024)
+        };
+        using var output = new MemoryStream(estimatedCapacity);
         foreach (var chunk in encryptedBase64.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
         {
             var data = Convert.FromBase64String(chunk);
@@ -680,7 +691,7 @@ ORDER BY timestamp ASC
 LIMIT $limit;";
         cmd.Parameters.AddWithValue("$limit", limit);
 
-        var list = new List<SmsPayload>();
+        var list = new List<SmsPayload>(Math.Min(limit, 1024));
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {

@@ -25,6 +25,7 @@ import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.security.cert.CertificateFactory
 import java.util.Base64
+import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
@@ -67,6 +68,20 @@ object GatewayRuntime {
 
     @Volatile
     private var flushInProgress = false
+
+    private val historySyncInProgress = AtomicBoolean(false)
+    private val httpClientLock = Any()
+
+    @Volatile
+    private var cachedHttpClient: OkHttpClient? = null
+
+    @Volatile
+    private var cachedHttpClientBaseUrl: String? = null
+
+    @Volatile
+    private var cachedHttpClientCertStamp: Long = -1L
+
+    fun isHistorySyncRunning(): Boolean = historySyncInProgress.get()
 
     private fun getDb(context: Context): GatewayLocalDb {
         if (db == null) {
@@ -166,24 +181,28 @@ object GatewayRuntime {
 
         val local = getDb(context)
         try {
-            val pending = local.listPending(500)
-            if (pending.isEmpty()) return
-
             val serverPublicPem = fetchServerPublicKey(context, cfg)
-            pending.forEach { item ->
-                runCatching {
-                    uploadInboundSmsSync(
-                        context = context,
-                        cfg = cfg,
-                        phone = item.phone,
-                        content = item.content,
-                        timestamp = item.timestamp,
-                        direction = item.direction,
-                        messageId = item.messageId,
-                        serverPublicPem = serverPublicPem
-                    )
-                    local.deletePending(item.id)
+            repeat(20) {
+                val pending = local.listPending(200)
+                if (pending.isEmpty()) return
+
+                val uploadedIds = ArrayList<Long>(pending.size)
+                pending.forEach { item ->
+                    runCatching {
+                        uploadInboundSmsSync(
+                            context = context,
+                            cfg = cfg,
+                            phone = item.phone,
+                            content = item.content,
+                            timestamp = item.timestamp,
+                            direction = item.direction,
+                            messageId = item.messageId,
+                            serverPublicPem = serverPublicPem
+                        )
+                        uploadedIds += item.id
+                    }
                 }
+                local.deletePending(uploadedIds)
             }
         } finally {
             flushInProgress = false
@@ -196,6 +215,11 @@ object GatewayRuntime {
         onProgress: ((Int, Int) -> Unit)? = null,
         callback: (String) -> Unit
     ) {
+        if (!historySyncInProgress.compareAndSet(false, true)) {
+            callback("History sync already running")
+            return
+        }
+
         thread {
             runCatching {
                 val uri = Telephony.Sms.CONTENT_URI
@@ -214,9 +238,10 @@ object GatewayRuntime {
                     return@runCatching
                 }
 
-                val serverPublicPem = fetchServerPublicKey(context, cfg)
                 var count = 0
                 var latestTimestamp = lastHistorySyncTs
+                val batch = ArrayList<PendingUploadInput>(200)
+                var lastProgressAt = 0L
                 onProgress?.invoke(0, total)
                 cursor.use {
                     val idIdx = it.getColumnIndexOrThrow(Telephony.Sms._ID)
@@ -232,33 +257,50 @@ object GatewayRuntime {
                         val timestamp = it.getLong(dateIdx)
                         val type = it.getInt(typeIdx)
                         val direction = if (type == Telephony.Sms.MESSAGE_TYPE_SENT) "outbound" else "inbound"
-                        uploadInboundSmsSync(
-                            context = context,
-                            cfg = cfg,
+                        batch += PendingUploadInput(
                             phone = phone,
                             content = content,
                             timestamp = timestamp,
                             direction = direction,
-                            messageId = "sms-$smsId",
-                            serverPublicPem = serverPublicPem
+                            messageId = "sms-$smsId"
                         )
+
+                        if (batch.size >= 200) {
+                            getDb(context).enqueueUploads(batch)
+                            batch.clear()
+                        }
+
                         count++
                         if (timestamp > latestTimestamp) {
                             latestTimestamp = timestamp
                         }
-                        if (count == total || count % 25 == 0) {
+                        val now = System.currentTimeMillis()
+                        if (count == total || now - lastProgressAt >= 250L) {
+                            lastProgressAt = now
                             onProgress?.invoke(count, total)
                         }
                     }
+                }
+
+                if (batch.isNotEmpty()) {
+                    getDb(context).enqueueUploads(batch)
+                    batch.clear()
                 }
 
                 if (latestTimestamp > lastHistorySyncTs) {
                     prefs.edit().putLong(HISTORY_LAST_SYNC_TS_KEY, latestTimestamp).apply()
                 }
                 onProgress?.invoke(total, total)
-                callback("History sync complete: $count messages")
+                thread {
+                    runCatching {
+                        flushPendingUploads(context, cfg)
+                    }
+                }
+                callback("History sync complete: $count messages, uploading in background")
             }.onFailure {
                 callback("History sync error: ${it.message}")
+            }.also {
+                historySyncInProgress.set(false)
             }
         }
     }
@@ -387,42 +429,64 @@ object GatewayRuntime {
     }
 
     private fun httpClient(context: Context, cfg: GatewayConfig): OkHttpClient {
-        val builder = OkHttpClient.Builder()
-            .addInterceptor(Interceptor { chain ->
-                val original = chain.request()
-                val req = original.newBuilder()
-                val password = RuntimeConfig.password?.trim()
-                if (!password.isNullOrEmpty()) {
-                    req.header("X-Password", password)
-                }
-                chain.proceed(req.build())
-            })
-
-        if (cfg.serverBaseUrl.startsWith("https://", ignoreCase = true) && !GatewayCertificateStore.hasCertificate(context)) {
-            error("HTTPS requires an imported server certificate")
+        val certStamp = GatewayCertificateStore.certFile(context).let { file ->
+            if (file.exists()) file.lastModified() else -1L
         }
-
-        if (cfg.serverBaseUrl.startsWith("https://", ignoreCase = true) && GatewayCertificateStore.hasCertificate(context)) {
-            val cf = CertificateFactory.getInstance("X.509")
-            GatewayCertificateStore.openInputStream(context).use { input ->
-                if (input != null) {
-                    val ca = cf.generateCertificate(input)
-                    val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
-                    keyStore.load(null, null)
-                    keyStore.setCertificateEntry("server", ca)
-
-                    val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-                    tmf.init(keyStore)
-                    val trustManager = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
-
-                    val sslContext = SSLContext.getInstance("TLS")
-                    sslContext.init(null, arrayOf(trustManager), null)
-                    builder.sslSocketFactory(sslContext.socketFactory, trustManager)
-                }
+        cachedHttpClient?.let { existing ->
+            if (cachedHttpClientBaseUrl == cfg.serverBaseUrl && cachedHttpClientCertStamp == certStamp) {
+                return existing
             }
         }
 
-        return builder.build()
+        synchronized(httpClientLock) {
+            cachedHttpClient?.let { existing ->
+                if (cachedHttpClientBaseUrl == cfg.serverBaseUrl && cachedHttpClientCertStamp == certStamp) {
+                    return existing
+                }
+            }
+
+            val builder = OkHttpClient.Builder()
+                .retryOnConnectionFailure(true)
+                .addInterceptor(Interceptor { chain ->
+                    val original = chain.request()
+                    val req = original.newBuilder()
+                    val password = RuntimeConfig.password?.trim()
+                    if (!password.isNullOrEmpty()) {
+                        req.header("X-Password", password)
+                    }
+                    chain.proceed(req.build())
+                })
+
+            if (cfg.serverBaseUrl.startsWith("https://", ignoreCase = true) && !GatewayCertificateStore.hasCertificate(context)) {
+                error("HTTPS requires an imported server certificate")
+            }
+
+            if (cfg.serverBaseUrl.startsWith("https://", ignoreCase = true) && GatewayCertificateStore.hasCertificate(context)) {
+                val cf = CertificateFactory.getInstance("X.509")
+                GatewayCertificateStore.openInputStream(context).use { input ->
+                    if (input != null) {
+                        val ca = cf.generateCertificate(input)
+                        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+                        keyStore.load(null, null)
+                        keyStore.setCertificateEntry("server", ca)
+
+                        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+                        tmf.init(keyStore)
+                        val trustManager = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
+
+                        val sslContext = SSLContext.getInstance("TLS")
+                        sslContext.init(null, arrayOf(trustManager), null)
+                        builder.sslSocketFactory(sslContext.socketFactory, trustManager)
+                    }
+                }
+            }
+
+            return builder.build().also {
+                cachedHttpClient = it
+                cachedHttpClientBaseUrl = cfg.serverBaseUrl
+                cachedHttpClientCertStamp = certStamp
+            }
+        }
     }
 
     private fun getOrCreateKeyPairPem(context: Context): Pair<String, String> {
