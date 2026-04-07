@@ -18,6 +18,7 @@ import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.PublicKey
+import java.security.Security
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.security.cert.CertificateFactory
@@ -405,7 +406,7 @@ object GatewayRuntime {
 
     private fun loadPublicKey(publicPem: String): PublicKey {
         val bytes = Base64.getMimeDecoder().decode(publicPem.pemBody())
-        val keyFactory = KeyFactory.getInstance("RSA")
+        val keyFactory = rawRsaKeyFactory()
         return runCatching {
             keyFactory.generatePublic(X509EncodedKeySpec(bytes))
         }.getOrElse {
@@ -416,7 +417,26 @@ object GatewayRuntime {
     private fun loadPrivateKey(privatePem: String): PrivateKey {
         val bytes = Base64.getDecoder().decode(privatePem.pemBody())
         val spec = PKCS8EncodedKeySpec(bytes)
-        return KeyFactory.getInstance("RSA").generatePrivate(spec)
+        return rawRsaKeyFactory().generatePrivate(spec)
+    }
+
+    private fun rawRsaKeyFactory(): KeyFactory {
+        val preferredProviders = linkedSetOf("BC", "AndroidOpenSSL", "Conscrypt")
+        preferredProviders.forEach { providerName ->
+            runCatching {
+                return KeyFactory.getInstance("RSA", providerName)
+            }
+        }
+
+        Security.getProviders().forEach { provider ->
+            val name = provider.name ?: return@forEach
+            if (name.contains("AndroidKeyStore", ignoreCase = true)) return@forEach
+            runCatching {
+                return KeyFactory.getInstance("RSA", provider)
+            }
+        }
+
+        return KeyFactory.getInstance("RSA")
     }
 
     private fun toPem(title: String, raw: ByteArray): String {
