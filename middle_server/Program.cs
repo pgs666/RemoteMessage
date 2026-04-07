@@ -26,7 +26,12 @@ builder.Services.AddSingleton(httpsSettings);
 var app = builder.Build();
 var startupRepo = app.Services.GetRequiredService<SqliteRepository>();
 
-app.Logger.LogInformation("RemoteMessage middle server starting from {BaseDirectory}", AppContext.BaseDirectory);
+app.Logger.LogInformation(
+    "RemoteMessage middle server starting. Runtime directory={RuntimeDirectory}; ExecutablePath={ExecutablePath}; AppContext.BaseDirectory={AppContextBaseDirectory}",
+    RuntimeLayout.RuntimeDirectory,
+    RuntimeLayout.ExecutablePath,
+    AppContext.BaseDirectory
+);
 app.Logger.LogInformation("Loaded config {ServerConfPath}; HTTPS port={HttpsPort}", serverSettings.ServerConfigFilePath, serverSettings.HttpsPort);
 app.Logger.LogInformation("Runtime files are created beside the executable: server.db, server.conf, server-cert.cer, server-cert.pfx");
 app.Logger.LogInformation("SQLite database path: {DatabaseFilePath}", startupRepo.DatabaseFilePath);
@@ -337,6 +342,37 @@ static bool IsValidPhone(string? phone)
     return !string.IsNullOrWhiteSpace(normalized) && normalized.Length <= 64;
 }
 
+public static class RuntimeLayout
+{
+    public static string ExecutablePath { get; } = ResolveExecutablePath();
+    public static string RuntimeDirectory { get; } = ResolveRuntimeDirectory();
+
+    private static string ResolveExecutablePath()
+    {
+        var path = Environment.ProcessPath;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            return path;
+        }
+
+        path = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+        if (!string.IsNullOrWhiteSpace(path))
+        {
+            return path;
+        }
+
+        return AppContext.BaseDirectory;
+    }
+
+    private static string ResolveRuntimeDirectory()
+    {
+        var path = ResolveExecutablePath();
+        return Directory.Exists(path)
+            ? path
+            : Path.GetDirectoryName(path) ?? AppContext.BaseDirectory;
+    }
+}
+
 public static class MessageIdentity
 {
     public static string Build(string deviceId, string phone, string content, long timestamp, string direction)
@@ -411,7 +447,7 @@ public sealed class ServerRuntimeSettings
 
     public ServerRuntimeSettings()
     {
-        var baseDir = AppContext.BaseDirectory;
+        var baseDir = RuntimeLayout.RuntimeDirectory;
         ServerConfigFilePath = Path.Combine(baseDir, "server.conf");
         LegacyPasswordFilePath = Path.Combine(baseDir, "password.conf");
 
@@ -537,7 +573,7 @@ public sealed class HttpsCertificateSettings
 
     public HttpsCertificateSettings()
     {
-        var baseDir = AppContext.BaseDirectory;
+        var baseDir = RuntimeLayout.RuntimeDirectory;
         CerFilePath = Path.Combine(baseDir, "server-cert.cer");
         PfxFilePath = Path.Combine(baseDir, "server-cert.pfx");
 
@@ -596,7 +632,7 @@ public sealed class SqliteRepository
 
     public SqliteRepository()
     {
-        DatabaseFilePath = Path.Combine(AppContext.BaseDirectory, "server.db");
+        DatabaseFilePath = Path.Combine(RuntimeLayout.RuntimeDirectory, "server.db");
         _connectionString = new SqliteConnectionStringBuilder { DataSource = DatabaseFilePath }.ToString();
         EnsureSchema();
     }
