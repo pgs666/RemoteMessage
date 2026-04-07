@@ -9,24 +9,37 @@ using Microsoft.Data.Sqlite;
 
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 
+var serverSettings = new ServerRuntimeSettings();
 var httpsSettings = new HttpsCertificateSettings();
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.Listen(IPAddress.Any, httpsSettings.HttpsPort, listen => listen.UseHttps(httpsSettings.Certificate));
+    options.Limits.MaxRequestBodySize = 256 * 1024;
+    options.Listen(IPAddress.Any, serverSettings.HttpsPort, listen => listen.UseHttps(httpsSettings.Certificate));
 });
 builder.Services.AddSingleton<CryptoState>();
 builder.Services.AddSingleton<GatewayRegistry>();
 builder.Services.AddSingleton<SqliteRepository>();
-builder.Services.AddSingleton<PasswordSecuritySettings>();
+builder.Services.AddSingleton(serverSettings);
 builder.Services.AddSingleton(httpsSettings);
 
 var app = builder.Build();
+var startupRepo = app.Services.GetRequiredService<SqliteRepository>();
+
+app.Logger.LogInformation("RemoteMessage middle server starting from {BaseDirectory}", AppContext.BaseDirectory);
+app.Logger.LogInformation("Loaded config {ServerConfPath}; HTTPS port={HttpsPort}", serverSettings.ServerConfigFilePath, serverSettings.HttpsPort);
+app.Logger.LogInformation("Runtime files are created beside the executable: server.db, server.conf, server-cert.cer, server-cert.pfx");
+app.Logger.LogInformation("SQLite database path: {DatabaseFilePath}", startupRepo.DatabaseFilePath);
+if (serverSettings.Password.Length < 16)
+{
+    app.Logger.LogWarning("Configured password is shorter than 16 characters. Use a long random password before any internet exposure.");
+}
+app.Logger.LogWarning("Security review result: this service is suitable for LAN/VPN or reverse-proxied deployment, but it is not sufficient for direct public internet exposure without stronger auth, rate limiting, replay protection, and monitoring.");
 
 app.Use(async (context, next) =>
 {
     var repo = context.RequestServices.GetRequiredService<SqliteRepository>();
-    var sec = context.RequestServices.GetRequiredService<PasswordSecuritySettings>();
+    var sec = context.RequestServices.GetRequiredService<ServerRuntimeSettings>();
 
     var path = context.Request.Path.Value ?? string.Empty;
     var requiresAuth = !path.Equals("/healthz", StringComparison.OrdinalIgnoreCase);
@@ -36,7 +49,7 @@ app.Use(async (context, next) =>
     if (requiresAuth)
     {
         var password = context.Request.Headers["X-Password"].ToString();
-        if (!string.Equals(password, sec.Password, StringComparison.Ordinal))
+        if (!PasswordMatches(password, sec.Password))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await context.Response.WriteAsJsonAsync(new { error = "invalid password" });
@@ -58,9 +71,9 @@ app.MapGet("/api/crypto/server-public-key", (CryptoState crypto) =>
 
 app.MapPost("/api/gateway/register", (RegisterGatewayRequest req, GatewayRegistry registry, SqliteRepository repo) =>
 {
-    if (string.IsNullOrWhiteSpace(req.DeviceId) || string.IsNullOrWhiteSpace(req.PublicKeyPem))
+    if (ValidateRegisterGatewayRequest(req) is { } error)
     {
-        return Results.BadRequest("deviceId/publicKeyPem required");
+        return error;
     }
 
     registry.Upsert(req.DeviceId, req.PublicKeyPem);
@@ -68,8 +81,13 @@ app.MapPost("/api/gateway/register", (RegisterGatewayRequest req, GatewayRegistr
     return Results.Ok(new { ok = true, req.DeviceId });
 });
 
-app.MapPost("/api/gateway/sms/upload", (UploadSmsRequest req, CryptoState crypto, SqliteRepository repo) =>
+app.MapPost("/api/gateway/sms/upload", (UploadSmsRequest req, CryptoState crypto, SqliteRepository repo, ILogger<Program> logger) =>
 {
+    if (ValidateUploadSmsRequest(req) is { } error)
+    {
+        return error;
+    }
+
     try
     {
         var plain = crypto.DecryptWithServerPrivateKey(req.EncryptedPayloadBase64);
@@ -77,6 +95,11 @@ app.MapPost("/api/gateway/sms/upload", (UploadSmsRequest req, CryptoState crypto
         if (payload is null)
         {
             return Results.BadRequest("invalid payload");
+        }
+
+        if (ValidateGatewayPayload(payload) is { } payloadError)
+        {
+            return payloadError;
         }
 
         var normalized = new SmsPayload(
@@ -95,21 +118,27 @@ app.MapPost("/api/gateway/sms/upload", (UploadSmsRequest req, CryptoState crypto
     }
     catch (Exception ex)
     {
-        return Results.BadRequest(new { error = ex.Message });
+        logger.LogWarning(ex, "Failed to decrypt or store gateway upload for device {DeviceId}", req.DeviceId);
+        return Results.BadRequest(new { error = "invalid encrypted payload" });
     }
 });
 
 app.MapGet("/api/client/inbox", (long? sinceTs, int? limit, string? phone, SqliteRepository repo) =>
 {
+    if (!string.IsNullOrWhiteSpace(phone) && !IsValidPhone(phone))
+    {
+        return Results.BadRequest("phone invalid");
+    }
+
     var list = repo.QueryMessages(sinceTs, limit ?? 5000, phone);
     return Results.Ok(list);
 });
 
 app.MapPost("/api/client/conversations/pin", (PinConversationRequest req, SqliteRepository repo) =>
 {
-    if (string.IsNullOrWhiteSpace(req.Phone))
+    if (ValidatePinRequest(req) is { } error)
     {
-        return Results.BadRequest("phone required");
+        return error;
     }
 
     repo.SetPinned(req.Phone, req.Pinned);
@@ -123,6 +152,11 @@ app.MapGet("/api/client/conversations/pins", (SqliteRepository repo) =>
 
 app.MapPost("/api/client/send", (SendSmsRequest req, GatewayRegistry registry, SqliteRepository repo) =>
 {
+    if (ValidateSendRequest(req) is { } error)
+    {
+        return error;
+    }
+
     if (!registry.TryGetPublicKey(req.DeviceId, out var pem) || string.IsNullOrWhiteSpace(pem))
     {
         pem = repo.GetGatewayPublicKey(req.DeviceId);
@@ -203,6 +237,106 @@ static int GetMaxOaepSha256PlaintextSize(RSA rsa)
     return keyBytes - (2 * hashBytes) - 2;
 }
 
+static bool PasswordMatches(string? provided, string expected)
+{
+    var left = Encoding.UTF8.GetBytes(provided ?? string.Empty);
+    var right = Encoding.UTF8.GetBytes(expected ?? string.Empty);
+    return left.Length == right.Length && CryptographicOperations.FixedTimeEquals(left, right);
+}
+
+static IResult? ValidateRegisterGatewayRequest(RegisterGatewayRequest req)
+{
+    if (string.IsNullOrWhiteSpace(req.DeviceId) || string.IsNullOrWhiteSpace(req.PublicKeyPem))
+    {
+        return Results.BadRequest("deviceId/publicKeyPem required");
+    }
+
+    if (req.DeviceId.Length > 128)
+    {
+        return Results.BadRequest("deviceId too long");
+    }
+
+    if (req.PublicKeyPem.Length is < 128 or > 16384)
+    {
+        return Results.BadRequest("publicKeyPem length invalid");
+    }
+
+    return null;
+}
+
+static IResult? ValidateUploadSmsRequest(UploadSmsRequest req)
+{
+    if (string.IsNullOrWhiteSpace(req.DeviceId) || string.IsNullOrWhiteSpace(req.EncryptedPayloadBase64))
+    {
+        return Results.BadRequest("deviceId/encryptedPayloadBase64 required");
+    }
+
+    if (req.DeviceId.Length > 128)
+    {
+        return Results.BadRequest("deviceId too long");
+    }
+
+    if (req.EncryptedPayloadBase64.Length > 262144)
+    {
+        return Results.BadRequest("encrypted payload too large");
+    }
+
+    return null;
+}
+
+static IResult? ValidateGatewayPayload(GatewaySmsPayload payload)
+{
+    if (!IsValidPhone(payload.Phone))
+    {
+        return Results.BadRequest("phone invalid");
+    }
+
+    if (payload.Content.Length > 8192)
+    {
+        return Results.BadRequest("content too large");
+    }
+
+    if (!string.IsNullOrWhiteSpace(payload.MessageId) && payload.MessageId.Length > 256)
+    {
+        return Results.BadRequest("messageId too long");
+    }
+
+    return null;
+}
+
+static IResult? ValidatePinRequest(PinConversationRequest req)
+{
+    return IsValidPhone(req.Phone)
+        ? null
+        : Results.BadRequest("phone required");
+}
+
+static IResult? ValidateSendRequest(SendSmsRequest req)
+{
+    if (string.IsNullOrWhiteSpace(req.DeviceId) || !IsValidPhone(req.TargetPhone) || string.IsNullOrWhiteSpace(req.Content))
+    {
+        return Results.BadRequest("deviceId/targetPhone/content required");
+    }
+
+    if (req.DeviceId.Length > 128)
+    {
+        return Results.BadRequest("deviceId too long");
+    }
+
+    if (req.Content.Length > 8192)
+    {
+        return Results.BadRequest("content too large");
+    }
+
+    return null;
+}
+
+static bool IsValidPhone(string? phone)
+{
+    var normalized = phone?.Trim();
+    return !string.IsNullOrWhiteSpace(normalized) && normalized.Length <= 64;
+}
+
 public static class MessageIdentity
 {
     public static string Build(string deviceId, string phone, string content, long timestamp, string direction)
@@ -266,45 +400,132 @@ public sealed class GatewayRegistry
     }
 }
 
-public sealed class PasswordSecuritySettings
+public sealed class ServerRuntimeSettings
 {
     public string Password { get; }
-    public string PasswordFilePath { get; }
+    public int HttpsPort { get; }
+    public string ServerConfigFilePath { get; }
+    public string LegacyPasswordFilePath { get; }
 
-    public PasswordSecuritySettings()
+    private const int DefaultHttpsPort = 5001;
+
+    public ServerRuntimeSettings()
     {
-        PasswordFilePath = Path.Combine(AppContext.BaseDirectory, "password.conf");
-        if (!File.Exists(PasswordFilePath))
+        var baseDir = AppContext.BaseDirectory;
+        ServerConfigFilePath = Path.Combine(baseDir, "server.conf");
+        LegacyPasswordFilePath = Path.Combine(baseDir, "password.conf");
+
+        var config = LoadOrCreateConfig();
+        Password = config.Password;
+        HttpsPort = config.HttpsPort;
+    }
+
+    private (string Password, int HttpsPort) LoadOrCreateConfig()
+    {
+        if (!File.Exists(ServerConfigFilePath))
         {
-            var generated = Convert.ToBase64String(RandomNumberGenerator.GetBytes(18));
-            File.WriteAllText(
-                PasswordFilePath,
-                "# RemoteMessage password.conf\n# Edit the password value below\npassword=" + generated + "\n",
-                Encoding.UTF8
-            );
-            Password = generated;
-            return;
+            var migratedPassword = TryLoadLegacyPassword();
+            var generatedPassword = string.IsNullOrWhiteSpace(migratedPassword)
+                ? Convert.ToBase64String(RandomNumberGenerator.GetBytes(18))
+                : migratedPassword!;
+
+            WriteServerConfig(DefaultHttpsPort, generatedPassword);
+            return (generatedPassword, DefaultHttpsPort);
         }
 
-        var lines = File.ReadAllLines(PasswordFilePath, Encoding.UTF8);
-        var raw = lines
+        var values = ParseKeyValueFile(ServerConfigFilePath);
+        var changed = false;
+
+        if (!values.TryGetValue("password", out var password) || string.IsNullOrWhiteSpace(password))
+        {
+            password = TryLoadLegacyPassword();
+            if (string.IsNullOrWhiteSpace(password))
+            {
+                password = Convert.ToBase64String(RandomNumberGenerator.GetBytes(18));
+            }
+            changed = true;
+        }
+
+        var httpsPort = DefaultHttpsPort;
+        if (values.TryGetValue("https_port", out var rawPort) && int.TryParse(rawPort, out var parsedPort) && parsedPort is >= 1 and <= 65535)
+        {
+            httpsPort = parsedPort;
+        }
+        else
+        {
+            changed = true;
+        }
+
+        if (changed)
+        {
+            WriteServerConfig(httpsPort, password!);
+        }
+
+        return (password!, httpsPort);
+    }
+
+    private string? TryLoadLegacyPassword()
+    {
+        if (!File.Exists(LegacyPasswordFilePath))
+        {
+            return null;
+        }
+
+        var values = ParseKeyValueFile(LegacyPasswordFilePath);
+        if (values.TryGetValue("password", out var password) && !string.IsNullOrWhiteSpace(password))
+        {
+            return password;
+        }
+
+        var raw = File.ReadAllLines(LegacyPasswordFilePath, Encoding.UTF8)
             .Select(x => x.Trim())
             .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x) && !x.StartsWith("#", StringComparison.Ordinal));
 
         if (string.IsNullOrWhiteSpace(raw))
         {
-            Password = "change-me";
-            return;
+            return null;
         }
 
-        Password = raw.Contains('=')
+        return raw.Contains('=')
             ? raw[(raw.IndexOf('=') + 1)..].Trim()
             : raw;
+    }
 
-        if (string.IsNullOrWhiteSpace(Password))
+    private Dictionary<string, string> ParseKeyValueFile(string path)
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var line in File.ReadAllLines(path, Encoding.UTF8))
         {
-            Password = "change-me";
+            var trimmed = line.Trim();
+            if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith("#", StringComparison.Ordinal) || trimmed.StartsWith(";", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var idx = trimmed.IndexOf('=');
+            if (idx <= 0)
+            {
+                continue;
+            }
+
+            var key = trimmed[..idx].Trim();
+            var value = trimmed[(idx + 1)..].Trim();
+            if (!string.IsNullOrWhiteSpace(key))
+            {
+                result[key] = value;
+            }
         }
+
+        return result;
+    }
+
+    private void WriteServerConfig(int httpsPort, string password)
+    {
+        File.WriteAllText(
+            ServerConfigFilePath,
+            $"# RemoteMessage server.conf\n# Generated on first start. Edit values and restart the service.\nhttps_port={httpsPort}\npassword={password}\n",
+            new UTF8Encoding(false)
+        );
     }
 }
 
@@ -313,16 +534,12 @@ public sealed class HttpsCertificateSettings
     public X509Certificate2 Certificate { get; }
     public string CerFilePath { get; }
     public string PfxFilePath { get; }
-    public int HttpsPort { get; }
 
     public HttpsCertificateSettings()
     {
         var baseDir = AppContext.BaseDirectory;
         CerFilePath = Path.Combine(baseDir, "server-cert.cer");
         PfxFilePath = Path.Combine(baseDir, "server-cert.pfx");
-        HttpsPort = int.TryParse(Environment.GetEnvironmentVariable("REMOTE_MESSAGE_HTTPS_PORT"), out var p) && p is >= 1 and <= 65535
-            ? p
-            : 5001;
 
         Certificate = LoadOrCreateCertificate();
     }
@@ -375,11 +592,12 @@ public sealed class HttpsCertificateSettings
 public sealed class SqliteRepository
 {
     private readonly string _connectionString;
+    public string DatabaseFilePath { get; }
 
     public SqliteRepository()
     {
-        var dbPath = Path.Combine(AppContext.BaseDirectory, "server.db");
-        _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
+        DatabaseFilePath = Path.Combine(AppContext.BaseDirectory, "server.db");
+        _connectionString = new SqliteConnectionStringBuilder { DataSource = DatabaseFilePath }.ToString();
         EnsureSchema();
     }
 
