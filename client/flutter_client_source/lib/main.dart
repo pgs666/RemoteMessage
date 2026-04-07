@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -71,13 +72,21 @@ class _MessageHomePageState extends State<MessageHomePage> {
   late final TextEditingController _deviceCtrl;
   final _searchCtrl = TextEditingController();
   final _composerCtrl = TextEditingController();
+  final _chatScrollCtrl = ScrollController();
+  final ValueNotifier<int> _uiRefreshTick = ValueNotifier(0);
 
   final LocalDatabase _db = LocalDatabase();
   bool _loading = false;
+  bool _syncingNow = false;
   String _status = 'Ready';
   String _search = '';
   String? _activePhone;
   int _lastSyncTs = 0;
+  double? _syncProgress;
+  Timer? _autoRefreshTimer;
+  Timer? _searchDebounceTimer;
+  List<ConversationSummary> _conversationCache = const [];
+  List<SmsItem> _activeMessageCache = const [];
 
   bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
@@ -88,19 +97,92 @@ class _MessageHomePageState extends State<MessageHomePage> {
     _serverCtrl = TextEditingController(text: widget.settings.serverBaseUrl);
     _deviceCtrl = TextEditingController(text: widget.settings.deviceId);
     _searchCtrl.addListener(() {
-      setState(() => _search = _searchCtrl.text.trim().toLowerCase());
+      _searchDebounceTimer?.cancel();
+      _searchDebounceTimer = Timer(const Duration(milliseconds: 250), () {
+        _search = _searchCtrl.text.trim().toLowerCase();
+        _refreshLocalCaches();
+      });
     });
     _bootstrap();
   }
 
   Future<void> _bootstrap() async {
+    setState(() {
+      _loading = true;
+      _status = tr('初始化中...', 'Initializing...');
+      _syncProgress = null;
+    });
+
     await widget.settings.load();
     _serverCtrl.text = widget.settings.serverBaseUrl;
     _deviceCtrl.text = widget.settings.deviceId;
     await _db.init();
     _lastSyncTs = await _db.getMetaInt('lastSyncTs') ?? 0;
     _activePhone = await _db.getMetaString('activePhone');
-    await _syncInbox(fullSync: true);
+    await _refreshLocalCaches();
+    await _syncInbox(fullSync: true, interactive: true);
+    _startAutoRefresh();
+    if (mounted) {
+      setState(() => _loading = false);
+    }
+  }
+
+  Future<void> _refreshLocalCaches() async {
+    final conversations = await _db.getConversationSummaries(search: _search);
+    var nextActivePhone = _activePhone;
+
+    if (conversations.isNotEmpty) {
+      final stillExists = nextActivePhone != null && conversations.any((c) => c.phone == nextActivePhone);
+      if (!stillExists) {
+        nextActivePhone = conversations.first.phone;
+      }
+    } else {
+      nextActivePhone = null;
+    }
+
+    if (nextActivePhone != _activePhone) {
+      _activePhone = nextActivePhone;
+      if (_activePhone != null) {
+        await _db.setMetaString('activePhone', _activePhone!);
+      }
+    }
+
+    final messages = _activePhone == null ? const <SmsItem>[] : await _db.getMessagesByPhone(_activePhone!);
+    if (!mounted) return;
+
+    setState(() {
+      _conversationCache = conversations;
+      _activeMessageCache = messages;
+    });
+    _uiRefreshTick.value++;
+    _scrollChatToBottomSoon();
+  }
+
+  Future<void> _setActivePhone(String? phone) async {
+    _activePhone = phone;
+    if (phone != null) {
+      await _db.setMetaString('activePhone', phone);
+    }
+    await _refreshLocalCaches();
+  }
+
+  void _startAutoRefresh() {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      if (!mounted || _loading || _syncingNow) return;
+      _syncInbox(interactive: false);
+    });
+  }
+
+  void _scrollChatToBottomSoon() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!_chatScrollCtrl.hasClients) return;
+      _chatScrollCtrl.animateTo(
+        _chatScrollCtrl.position.maxScrollExtent,
+        duration: const Duration(milliseconds: 180),
+        curve: Curves.easeOut,
+      );
+    });
   }
 
   Future<void> _openSettings() async {
@@ -117,16 +199,26 @@ class _MessageHomePageState extends State<MessageHomePage> {
     widget.settings.password = result.password;
     widget.onThemeChanged(result.themeMode);
     setState(() => _status = tr('设置已更新', 'Settings updated'));
+    _startAutoRefresh();
+    await _syncInbox(fullSync: true, interactive: true);
   }
 
-  Future<void> _syncInbox({bool fullSync = false}) async {
-    setState(() {
-      _loading = true;
-      _status = fullSync ? tr('加载完整历史中...', 'Loading full history...') : tr('正在同步新消息...', 'Syncing new messages...');
-    });
+  Future<void> _syncInbox({bool fullSync = false, bool interactive = true}) async {
+    if (_syncingNow) return;
+
+    final server = _serverCtrl.text.trim();
+    if (server.isEmpty) return;
+
+    _syncingNow = true;
+    if (interactive && mounted) {
+      setState(() {
+        _loading = true;
+        _syncProgress = null;
+        _status = fullSync ? tr('加载完整历史中...', 'Loading full history...') : tr('正在同步新消息...', 'Syncing new messages...');
+      });
+    }
 
     try {
-      final server = _serverCtrl.text.trim();
       final since = fullSync ? 0 : _lastSyncTs;
       final url = Uri.parse('$server/api/client/inbox?sinceTs=$since&limit=10000');
       final response = await _getJson(url, password: widget.settings.password);
@@ -134,34 +226,69 @@ class _MessageHomePageState extends State<MessageHomePage> {
           .map((e) => SmsItem.fromJson(e as Map<String, dynamic>))
           .toList();
 
-      int added = 0;
+      if (interactive && mounted) {
+        setState(() {
+          _syncProgress = list.isEmpty ? 1 : 0.1;
+          _status = tr('正在写入本地消息...', 'Applying messages locally...');
+        });
+      }
+
+      final added = await _db.upsertMessages(
+        list,
+        onProgress: interactive
+            ? (done, total) {
+                if (!mounted) return;
+                setState(() {
+                  _syncProgress = total <= 0 ? 1 : 0.1 + ((done / total) * 0.75);
+                  _status = tr('正在写入本地消息... $done/$total', 'Applying messages locally... $done/$total');
+                });
+              }
+            : null,
+      );
+
       for (final item in list) {
-        final inserted = await _db.upsertMessage(item);
-        if (inserted) added++;
         if (item.timestamp > _lastSyncTs) _lastSyncTs = item.timestamp;
       }
 
       await _db.setMetaInt('lastSyncTs', _lastSyncTs);
 
-      final conversations = await _db.getConversationSummaries(search: _search);
-      if (_activePhone == null && conversations.isNotEmpty) {
-        _activePhone = conversations.first.phone;
-        await _db.setMetaString('activePhone', _activePhone!);
+      if (interactive && mounted) {
+        setState(() {
+          _syncProgress = 0.92;
+          _status = tr('刷新会话中...', 'Refreshing conversations...');
+        });
       }
 
+      await _refreshLocalCaches();
+
+      if (!mounted) return;
       setState(() {
-        _status = '${tr('同步完成', 'Sync done')}, +$added';
+        if (interactive) {
+          _status = added > 0
+              ? '${tr('同步完成', 'Sync done')}, +$added'
+              : tr('同步完成，没有新消息', 'Sync done, no new messages');
+          _syncProgress = 1;
+        } else if (added > 0) {
+          _status = '${tr('已自动同步新消息', 'Auto-synced new messages')}, +$added';
+        }
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() => _status = '${tr('同步失败', 'Sync failed')}: $e');
     } finally {
-      setState(() => _loading = false);
+      _syncingNow = false;
+      if (interactive && mounted) {
+        setState(() {
+          _loading = false;
+          _syncProgress = null;
+        });
+      }
     }
   }
 
   Future<void> _setPin(String phone, bool pin) async {
     await _db.setPinned(phone, pin);
-    setState(() {});
+    await _refreshLocalCaches();
     try {
       final server = _serverCtrl.text.trim();
       await _postJson(Uri.parse('$server/api/client/conversations/pin'), {
@@ -195,7 +322,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
         'content': content,
       }, password: widget.settings.password);
       _composerCtrl.clear();
-      await _syncInbox();
+      await _syncInbox(interactive: true);
       setState(() => _status = tr('消息已进入队列', 'Message queued'));
     } catch (e) {
       setState(() => _status = '${tr('发送失败', 'Send failed')}: $e');
@@ -237,16 +364,6 @@ class _MessageHomePageState extends State<MessageHomePage> {
     await _db.setMetaString('activePhone', phone);
     _composerCtrl.text = msg;
     await _sendSmsToActive();
-  }
-
-  Future<List<ConversationSummary>> _conversations() {
-    return _db.getConversationSummaries(search: _search);
-  }
-
-  Future<List<SmsItem>> _activeMessages() {
-    final phone = _activePhone;
-    if (phone == null) return Future.value(const []);
-    return _db.getMessagesByPhone(phone);
   }
 
   Future<String> _getJson(Uri url, {String? password}) async {
@@ -302,6 +419,20 @@ class _MessageHomePageState extends State<MessageHomePage> {
     );
   }
 
+  Widget _buildStatusBlock() {
+    final showProgress = _loading || _syncProgress != null;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('${tr('状态', 'Status')}: $_status'),
+        if (showProgress) ...[
+          const SizedBox(height: 8),
+          LinearProgressIndicator(value: _syncProgress),
+        ],
+      ],
+    );
+  }
+
   Widget _buildTopBar() {
     return Row(
       children: [
@@ -332,7 +463,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
         children: [
           _buildTopBar(),
           const SizedBox(height: 8),
-          Align(alignment: Alignment.centerLeft, child: Text('${tr('状态', 'Status')}: $_status')),
+          _buildStatusBlock(),
           const SizedBox(height: 8),
           Expanded(
             child: Row(
@@ -355,7 +486,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
         children: [
           _buildTopBar(),
           const SizedBox(height: 8),
-          Align(alignment: Alignment.centerLeft, child: Text('${tr('状态', 'Status')}: $_status')),
+          _buildStatusBlock(),
           const SizedBox(height: 8),
           Expanded(child: _buildConversationList(onMobileTap: true)),
         ],
@@ -365,10 +496,10 @@ class _MessageHomePageState extends State<MessageHomePage> {
 
   Widget _buildConversationList({required bool onMobileTap}) {
     return Card(
-      child: FutureBuilder<List<ConversationSummary>>(
-        future: _conversations(),
-        builder: (context, snap) {
-          final data = snap.data ?? const <ConversationSummary>[];
+      child: ValueListenableBuilder<int>(
+        valueListenable: _uiRefreshTick,
+        builder: (context, _, __) {
+          final data = _conversationCache;
           if (data.isEmpty) return Center(child: Text(tr('暂无会话', 'No conversations')));
           return ListView.builder(
             itemCount: data.length,
@@ -381,15 +512,13 @@ class _MessageHomePageState extends State<MessageHomePage> {
                             title: Text(c.phone),
                 subtitle: Text(c.lastMessage.content, maxLines: 1, overflow: TextOverflow.ellipsis),
                 onTap: () async {
-                  _activePhone = c.phone;
-                  await _db.setMetaString('activePhone', c.phone);
+                  await _setActivePhone(c.phone);
                   if (onMobileTap && context.mounted) {
                     await Navigator.push(
                       context,
                       MaterialPageRoute(builder: (_) => MobileChatPage(parent: this, phone: c.phone)),
                     );
                   }
-                  setState(() {});
                 },
                 trailing: IconButton(
                   icon: Icon(c.pinned ? Icons.push_pin : Icons.push_pin_outlined),
@@ -414,12 +543,13 @@ class _MessageHomePageState extends State<MessageHomePage> {
           ),
           const Divider(height: 1),
           Expanded(
-            child: FutureBuilder<List<SmsItem>>(
-              future: _activeMessages(),
-              builder: (context, snap) {
-                final messages = snap.data ?? const <SmsItem>[];
+            child: ValueListenableBuilder<int>(
+              valueListenable: _uiRefreshTick,
+              builder: (context, _, __) {
+                final messages = _activeMessageCache;
                 if (messages.isEmpty) return Center(child: Text(tr('暂无消息', 'No messages')));
                 return ListView.builder(
+                  controller: _chatScrollCtrl,
                   itemCount: messages.length,
                   itemBuilder: (context, index) {
                     final m = messages[index];
@@ -473,6 +603,19 @@ class _MessageHomePageState extends State<MessageHomePage> {
         ],
       ),
     );
+  }
+
+  @override
+  void dispose() {
+    _autoRefreshTimer?.cancel();
+    _searchDebounceTimer?.cancel();
+    _uiRefreshTick.dispose();
+    _chatScrollCtrl.dispose();
+    _serverCtrl.dispose();
+    _deviceCtrl.dispose();
+    _searchCtrl.dispose();
+    _composerCtrl.dispose();
+    super.dispose();
   }
 }
 
@@ -804,6 +947,42 @@ class LocalDatabase {
     return changes > 0;
   }
 
+  Future<int> upsertMessages(List<SmsItem> items, {void Function(int done, int total)? onProgress}) async {
+    await init();
+    if (items.isEmpty) {
+      onProgress?.call(0, 0);
+      return 0;
+    }
+
+    final db = _db!;
+    var added = 0;
+    db.execute('BEGIN IMMEDIATE;');
+    try {
+      for (var i = 0; i < items.length; i++) {
+        final item = items[i];
+        db.execute(
+          '''
+          INSERT OR IGNORE INTO messages(id, device_id, phone, content, timestamp, direction)
+          VALUES(?, ?, ?, ?, ?, ?);
+          ''',
+          [item.id, item.deviceId, item.phone, item.content, item.timestamp, item.direction],
+        );
+        final changes = db.select('SELECT changes() AS c;').first['c'] as int;
+        if (changes > 0) {
+          added++;
+        }
+        if ((i + 1) % 200 == 0 || i + 1 == items.length) {
+          onProgress?.call(i + 1, items.length);
+        }
+      }
+      db.execute('COMMIT;');
+    } catch (_) {
+      db.execute('ROLLBACK;');
+      rethrow;
+    }
+    return added;
+  }
+
   Future<List<SmsItem>> getMessagesByPhone(String phone) async {
     await init();
     final rows = _db!.select(
@@ -827,45 +1006,58 @@ class LocalDatabase {
   Future<List<ConversationSummary>> getConversationSummaries({String search = ''}) async {
     await init();
     final db = _db!;
-    final pinSet = (await getPins()).toSet();
+    final normalizedSearch = search.trim().toLowerCase();
+    final searchLike = '%$normalizedSearch%';
     final rows = db.select(
-      'SELECT id, device_id, phone, content, timestamp, direction FROM messages ORDER BY timestamp ASC;',
+      '''
+      SELECT
+        m.id,
+        m.device_id,
+        m.phone,
+        m.content,
+        m.timestamp,
+        m.direction,
+        CASE WHEN p.phone IS NULL THEN 0 ELSE 1 END AS pinned
+      FROM messages m
+      LEFT JOIN pins p ON p.phone = m.phone
+      WHERE m.id = (
+        SELECT m2.id
+        FROM messages m2
+        WHERE m2.phone = m.phone
+        ORDER BY m2.timestamp DESC, m2.id DESC
+        LIMIT 1
+      )
+      AND (
+        ? = ''
+        OR LOWER(m.phone) LIKE ?
+        OR EXISTS (
+          SELECT 1
+          FROM messages s
+          WHERE s.phone = m.phone
+            AND (LOWER(s.phone) LIKE ? OR LOWER(s.content) LIKE ?)
+        )
+      )
+      ORDER BY pinned DESC, m.timestamp DESC, m.id DESC;
+      ''',
+      [normalizedSearch, searchLike, searchLike, searchLike],
     );
 
-    final messages = rows
+    return rows
         .map(
-          (r) => SmsItem(
-            id: r['id']?.toString() ?? '',
-            deviceId: r['device_id']?.toString() ?? '',
+          (r) => ConversationSummary(
             phone: r['phone']?.toString() ?? 'unknown',
-            content: r['content']?.toString() ?? '',
-            timestamp: (r['timestamp'] as num?)?.toInt() ?? 0,
-            direction: r['direction']?.toString() ?? 'inbound',
+            pinned: ((r['pinned'] as num?)?.toInt() ?? 0) == 1,
+            lastMessage: SmsItem(
+              id: r['id']?.toString() ?? '',
+              deviceId: r['device_id']?.toString() ?? '',
+              phone: r['phone']?.toString() ?? 'unknown',
+              content: r['content']?.toString() ?? '',
+              timestamp: (r['timestamp'] as num?)?.toInt() ?? 0,
+              direction: r['direction']?.toString() ?? 'inbound',
+            ),
           ),
         )
         .toList();
-
-    final map = <String, SmsItem>{};
-    for (final m in messages) {
-      if (search.isNotEmpty) {
-        final hit = m.phone.toLowerCase().contains(search) || m.content.toLowerCase().contains(search);
-        if (!hit) continue;
-      }
-      final old = map[m.phone];
-      if (old == null || old.timestamp < m.timestamp) {
-        map[m.phone] = m;
-      }
-    }
-
-    final list = map.entries
-        .map((e) => ConversationSummary(phone: e.key, lastMessage: e.value, pinned: pinSet.contains(e.key)))
-        .toList();
-
-    list.sort((a, b) {
-      if (a.pinned != b.pinned) return a.pinned ? -1 : 1;
-      return b.lastMessage.timestamp.compareTo(a.lastMessage.timestamp);
-    });
-    return list;
   }
 
   Future<void> setPinned(String phone, bool pinned) async {
@@ -924,6 +1116,7 @@ class LocalDatabase {
     ''');
     db.execute('CREATE INDEX IF NOT EXISTS idx_messages_phone_ts ON messages(phone, timestamp);');
     db.execute('CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);');
+    db.execute('CREATE INDEX IF NOT EXISTS idx_messages_phone_ts_id ON messages(phone, timestamp DESC, id DESC);');
 
     db.execute('''
       CREATE TABLE IF NOT EXISTS pins(

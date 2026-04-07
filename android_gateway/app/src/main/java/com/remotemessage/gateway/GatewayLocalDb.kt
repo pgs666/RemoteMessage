@@ -14,7 +14,7 @@ data class PendingUpload(
     val messageId: String?
 )
 
-class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_private.db", null, 1) {
+class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_private.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -28,9 +28,11 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
             )
             """.trimIndent()
         )
+        ensureIndexes(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        ensureIndexes(db)
     }
 
     fun enqueueUpload(phone: String, content: String, timestamp: Long, direction: String, messageId: String?) {
@@ -41,7 +43,7 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
             put("direction", direction)
             put("message_id", messageId)
         }
-        writableDatabase.insert("pending_uploads", null, values)
+        writableDatabase.insertWithOnConflict("pending_uploads", null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
 
     fun listPending(limit: Int = 200): List<PendingUpload> {
@@ -81,5 +83,22 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
 
     fun deletePending(id: Long) {
         writableDatabase.delete("pending_uploads", "id=?", arrayOf(id.toString()))
+    }
+
+    private fun ensureIndexes(db: SQLiteDatabase) {
+        db.execSQL(
+            """
+            DELETE FROM pending_uploads
+            WHERE message_id IS NOT NULL
+              AND id NOT IN (
+                SELECT MIN(id)
+                FROM pending_uploads
+                WHERE message_id IS NOT NULL
+                GROUP BY message_id
+              )
+            """.trimIndent()
+        )
+        db.execSQL("CREATE INDEX IF NOT EXISTS idx_pending_uploads_timestamp ON pending_uploads(timestamp)")
+        db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS idx_pending_uploads_message_id ON pending_uploads(message_id) WHERE message_id IS NOT NULL")
     }
 }

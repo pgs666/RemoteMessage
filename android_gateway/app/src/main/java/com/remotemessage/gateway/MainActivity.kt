@@ -7,8 +7,12 @@ import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
+import android.view.View
 import android.widget.Button
 import android.widget.EditText
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -21,6 +25,12 @@ class MainActivity : ComponentActivity() {
     private lateinit var pref: SharedPreferences
     private var webUiServer: GatewayWebUiServer? = null
     private var statusTextView: TextView? = null
+    private var syncProgressBar: ProgressBar? = null
+    private val realtimeSyncHandler = Handler(Looper.getMainLooper())
+    private var realtimeSyncRunnable: Runnable? = null
+
+    @Volatile
+    private var realtimeSyncBusy = false
 
     private val importCertLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val tv = statusTextView ?: return@registerForActivityResult
@@ -49,6 +59,7 @@ class MainActivity : ComponentActivity() {
         val editApiKey = findViewById<EditText>(R.id.editApiKey)
         val editWebUiPort = findViewById<EditText>(R.id.editWebUiPort)
         val textStatus = findViewById<TextView>(R.id.textStatus)
+        val progressSync = findViewById<ProgressBar>(R.id.progressSync)
         val btnSave = findViewById<Button>(R.id.btnSave)
         val btnRegister = findViewById<Button>(R.id.btnRegister)
         val btnPollOnce = findViewById<Button>(R.id.btnPollOnce)
@@ -58,6 +69,7 @@ class MainActivity : ComponentActivity() {
         val btnImportCert = findViewById<Button>(R.id.btnImportCert)
         val btnRequestSmsRole = findViewById<Button>(R.id.btnRequestSmsRole)
         statusTextView = textStatus
+        syncProgressBar = progressSync
 
         editServer.setText(pref.getString("server_base", "https://10.0.2.2:5001") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
@@ -73,6 +85,7 @@ class MainActivity : ComponentActivity() {
         PermissionAndRoleHelper.openUsageAccessSettings(this)
         GatewaySyncWorker.schedule(this)
         startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, editWebUiPort, textStatus)
+        startRealtimeSyncLoop(editServer, editDeviceId, editSimSubId, editApiKey, textStatus)
 
         btnSave.setOnClickListener {
             val serverText = editServer.text.toString().trim()
@@ -110,36 +123,58 @@ class MainActivity : ComponentActivity() {
         }
 
         btnRegister.setOnClickListener {
+            showProgress(indeterminate = true)
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
                 deviceId = editDeviceId.text.toString().trim(),
                 simSubId = editSimSubId.text.toString().trim().toIntOrNull()
             )
             GatewayRuntime.registerGateway(this, cfg) {
-                runOnUiThread { textStatus.text = it }
+                runOnUiThread {
+                    hideProgress()
+                    textStatus.text = it
+                }
             }
             GatewaySyncWorker.schedule(this)
         }
 
         btnPollOnce.setOnClickListener {
+            showProgress(indeterminate = true)
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
                 deviceId = editDeviceId.text.toString().trim(),
                 simSubId = editSimSubId.text.toString().trim().toIntOrNull()
             )
             GatewayRuntime.pollAndSend(this, cfg) {
-                runOnUiThread { textStatus.text = it }
+                runOnUiThread {
+                    hideProgress()
+                    textStatus.text = it
+                }
             }
         }
 
         btnSyncHistory.setOnClickListener {
+            showProgress(indeterminate = false, progress = 0, max = 1)
+            textStatus.text = getString(R.string.status_history_sync_preparing)
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
                 deviceId = editDeviceId.text.toString().trim(),
                 simSubId = editSimSubId.text.toString().trim().toIntOrNull()
             )
-            GatewayRuntime.syncHistoricalSms(this, cfg) {
-                runOnUiThread { textStatus.text = it }
+            GatewayRuntime.syncHistoricalSms(this, cfg, onProgress = { processed, total ->
+                runOnUiThread {
+                    if (total > 0) {
+                        showProgress(indeterminate = false, progress = processed, max = total)
+                        textStatus.text = getString(R.string.status_history_sync_progress, processed, total)
+                    } else {
+                        showProgress(indeterminate = true)
+                    }
+                }
+            }) {
+                runOnUiThread {
+                    hideProgress()
+                    textStatus.text = it
+                }
             }
         }
 
@@ -150,6 +185,7 @@ class MainActivity : ComponentActivity() {
         }
 
         btnFlushPending.setOnClickListener {
+            showProgress(indeterminate = true)
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
                 deviceId = editDeviceId.text.toString().trim(),
@@ -157,7 +193,10 @@ class MainActivity : ComponentActivity() {
             )
             Thread {
                 GatewayRuntime.flushPendingUploads(this, cfg)
-                runOnUiThread { textStatus.text = getString(R.string.status_pending_flushed) }
+                runOnUiThread {
+                    hideProgress()
+                    textStatus.text = getString(R.string.status_pending_flushed)
+                }
             }.start()
         }
 
@@ -255,7 +294,72 @@ class MainActivity : ComponentActivity() {
         startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, editWebUiPort, textStatus)
     }
 
+    private fun startRealtimeSyncLoop(
+        editServer: EditText,
+        editDeviceId: EditText,
+        editSimSubId: EditText,
+        editApiKey: EditText,
+        textStatus: TextView
+    ) {
+        stopRealtimeSyncLoop()
+
+        val runnable = object : Runnable {
+            override fun run() {
+                if (!realtimeSyncBusy && !isFinishing && !isDestroyed) {
+                    val cfg = GatewayConfig(
+                        serverBaseUrl = editServer.text.toString().trim(),
+                        deviceId = editDeviceId.text.toString().trim(),
+                        simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                    )
+                    RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
+
+                    if (cfg.serverBaseUrl.isNotBlank() && cfg.deviceId.isNotBlank()) {
+                        realtimeSyncBusy = true
+                        Thread {
+                            runCatching {
+                                GatewayRuntime.flushPendingUploads(this@MainActivity, cfg)
+                                GatewayRuntime.pollAndSendSync(this@MainActivity, cfg)
+                            }.onSuccess { result ->
+                                if (result != "No pending message") {
+                                    runOnUiThread { textStatus.text = result }
+                                }
+                            }
+                            realtimeSyncBusy = false
+                        }.start()
+                    }
+                }
+
+                realtimeSyncHandler.postDelayed(this, 5_000)
+            }
+        }
+
+        realtimeSyncRunnable = runnable
+        realtimeSyncHandler.postDelayed(runnable, 3_000)
+    }
+
+    private fun stopRealtimeSyncLoop() {
+        realtimeSyncRunnable?.let { realtimeSyncHandler.removeCallbacks(it) }
+        realtimeSyncRunnable = null
+        realtimeSyncBusy = false
+    }
+
+    private fun showProgress(indeterminate: Boolean, progress: Int = 0, max: Int = 100) {
+        syncProgressBar?.apply {
+            visibility = View.VISIBLE
+            isIndeterminate = indeterminate
+            if (!indeterminate) {
+                this.max = max.coerceAtLeast(1)
+                this.progress = progress.coerceIn(0, this.max)
+            }
+        }
+    }
+
+    private fun hideProgress() {
+        syncProgressBar?.visibility = View.GONE
+    }
+
     override fun onDestroy() {
+        stopRealtimeSyncLoop()
         webUiServer?.stop()
         webUiServer = null
         super.onDestroy()

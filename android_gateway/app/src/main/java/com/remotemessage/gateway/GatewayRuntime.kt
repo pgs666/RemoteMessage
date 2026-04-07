@@ -51,6 +51,22 @@ object GatewayRuntime {
     private const val KEY_PUBLIC = "public_key"
     private const val KEY_PRIVATE = "private_key"
     private const val KEYSTORE_ALIAS = "remote_message_gateway_rsa"
+    private const val HISTORY_LAST_SYNC_TS_KEY = "history_last_sync_ts"
+    private const val SERVER_PUBLIC_KEY_CACHE_MS = 10 * 60 * 1000L
+
+    @Volatile
+    private var cachedServerPublicPem: String? = null
+
+    @Volatile
+    private var cachedServerBaseUrl: String? = null
+
+    @Volatile
+    private var cachedServerPublicPemAt: Long = 0L
+
+    private val flushLock = Any()
+
+    @Volatile
+    private var flushInProgress = false
 
     private fun getDb(context: Context): GatewayLocalDb {
         if (db == null) {
@@ -143,33 +159,65 @@ object GatewayRuntime {
     }
 
     fun flushPendingUploads(context: Context, cfg: GatewayConfig) {
+        synchronized(flushLock) {
+            if (flushInProgress) return
+            flushInProgress = true
+        }
+
         val local = getDb(context)
-        val pending = local.listPending(200)
-        pending.forEach { item ->
-            runCatching {
-                uploadInboundSmsSync(
-                    context = context,
-                    cfg = cfg,
-                    phone = item.phone,
-                    content = item.content,
-                    timestamp = item.timestamp,
-                    direction = item.direction,
-                    messageId = item.messageId
-                )
-                local.deletePending(item.id)
+        try {
+            val pending = local.listPending(500)
+            if (pending.isEmpty()) return
+
+            val serverPublicPem = fetchServerPublicKey(context, cfg)
+            pending.forEach { item ->
+                runCatching {
+                    uploadInboundSmsSync(
+                        context = context,
+                        cfg = cfg,
+                        phone = item.phone,
+                        content = item.content,
+                        timestamp = item.timestamp,
+                        direction = item.direction,
+                        messageId = item.messageId,
+                        serverPublicPem = serverPublicPem
+                    )
+                    local.deletePending(item.id)
+                }
             }
+        } finally {
+            flushInProgress = false
         }
     }
 
-    fun syncHistoricalSms(context: Context, cfg: GatewayConfig, callback: (String) -> Unit) {
+    fun syncHistoricalSms(
+        context: Context,
+        cfg: GatewayConfig,
+        onProgress: ((Int, Int) -> Unit)? = null,
+        callback: (String) -> Unit
+    ) {
         thread {
             runCatching {
                 val uri = Telephony.Sms.CONTENT_URI
                 val projection = arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE)
-                val cursor = context.contentResolver.query(uri, projection, null, null, "${Telephony.Sms.DATE} ASC")
+                val prefs = context.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
+                val lastHistorySyncTs = prefs.getLong(HISTORY_LAST_SYNC_TS_KEY, 0L)
+                val selection = if (lastHistorySyncTs > 0L) "${Telephony.Sms.DATE} > ?" else null
+                val selectionArgs = if (lastHistorySyncTs > 0L) arrayOf(lastHistorySyncTs.toString()) else null
+                val cursor = context.contentResolver.query(uri, projection, selection, selectionArgs, "${Telephony.Sms.DATE} ASC")
                     ?: error("query sms failed")
 
+                val total = cursor.count
+                if (total <= 0) {
+                    onProgress?.invoke(0, 0)
+                    callback("History sync complete: 0 messages")
+                    return@runCatching
+                }
+
+                val serverPublicPem = fetchServerPublicKey(context, cfg)
                 var count = 0
+                var latestTimestamp = lastHistorySyncTs
+                onProgress?.invoke(0, total)
                 cursor.use {
                     val idIdx = it.getColumnIndexOrThrow(Telephony.Sms._ID)
                     val addressIdx = it.getColumnIndexOrThrow(Telephony.Sms.ADDRESS)
@@ -191,12 +239,24 @@ object GatewayRuntime {
                             content = content,
                             timestamp = timestamp,
                             direction = direction,
-                            messageId = "sms-$smsId"
+                            messageId = "sms-$smsId",
+                            serverPublicPem = serverPublicPem
                         )
                         count++
+                        if (timestamp > latestTimestamp) {
+                            latestTimestamp = timestamp
+                        }
+                        if (count == total || count % 25 == 0) {
+                            onProgress?.invoke(count, total)
+                        }
                     }
                 }
-                callback("History sync started: $count messages")
+
+                if (latestTimestamp > lastHistorySyncTs) {
+                    prefs.edit().putLong(HISTORY_LAST_SYNC_TS_KEY, latestTimestamp).apply()
+                }
+                onProgress?.invoke(total, total)
+                callback("History sync complete: $count messages")
             }.onFailure {
                 callback("History sync error: ${it.message}")
             }
@@ -267,9 +327,10 @@ object GatewayRuntime {
         content: String,
         timestamp: Long,
         direction: String,
-        messageId: String?
+        messageId: String?,
+        serverPublicPem: String? = null
     ) {
-        val serverPublicPem = fetchServerPublicKey(context, cfg)
+        val resolvedServerPublicPem = serverPublicPem ?: fetchServerPublicKey(context, cfg)
 
         val payload = JSONObject()
             .put("phone", phone)
@@ -279,7 +340,7 @@ object GatewayRuntime {
         if (!messageId.isNullOrBlank()) {
             payload.put("messageId", messageId)
         }
-        val encrypted = encryptByPublicKey(serverPublicPem, payload.toString())
+        val encrypted = encryptByPublicKey(resolvedServerPublicPem, payload.toString())
         val up = JSONObject()
             .put("deviceId", cfg.deviceId)
             .put("encryptedPayloadBase64", encrypted)
@@ -297,6 +358,16 @@ object GatewayRuntime {
     }
 
     private fun fetchServerPublicKey(context: Context, cfg: GatewayConfig): String {
+        val now = System.currentTimeMillis()
+        val cachedPem = cachedServerPublicPem
+        if (
+            !cachedPem.isNullOrBlank() &&
+            cachedServerBaseUrl == cfg.serverBaseUrl &&
+            now - cachedServerPublicPemAt <= SERVER_PUBLIC_KEY_CACHE_MS
+        ) {
+            return cachedPem
+        }
+
         val serverKeyReq = Request.Builder()
             .url("${cfg.serverBaseUrl}/api/crypto/server-public-key")
             .get()
@@ -307,7 +378,11 @@ object GatewayRuntime {
                 error("server public key fetch failed: ${it.code} $body")
             }
             val body = it.body?.string() ?: error("empty body")
-            JSONObject(body).getString("publicKey")
+            JSONObject(body).getString("publicKey").also { publicKey ->
+                cachedServerPublicPem = publicKey
+                cachedServerBaseUrl = cfg.serverBaseUrl
+                cachedServerPublicPemAt = now
+            }
         }
     }
 

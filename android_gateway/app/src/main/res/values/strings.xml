@@ -28,4 +28,6 @@
     <string name="status_cert_import_failed">Certificate import failed: %1$s</string>
     <string name="status_sms_role_requested">SMS role request sent. Please approve it in the system dialog.</string>
     <string name="status_sms_role_held">This app is already the default SMS app.</string>
+    <string name="status_history_sync_preparing">Preparing history sync…</string>
+    <string name="status_history_sync_progress">History sync progress: %1$d/%2$d</string>
 </resources>

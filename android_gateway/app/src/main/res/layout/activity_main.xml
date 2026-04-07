@@ -109,6 +109,15 @@
             android:layout_marginTop="8dp"
             android:text="@string/btn_request_sms_role" />
 
+        <ProgressBar
+            android:id="@+id/progressSync"
+            style="?android:attr/progressBarStyleHorizontal"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:max="100"
+            android:visibility="gone" />
+
         <TextView
             android:id="@+id/textStatus"
             android:layout_width="match_parent"
