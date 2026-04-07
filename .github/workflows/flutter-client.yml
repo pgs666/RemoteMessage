@@ -23,6 +23,11 @@ jobs:
       - name: Create Flutter app skeleton
         run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
 
+      - name: Add desktop db dependencies
+        run: |
+          cd client/flutter_client_build
+          flutter pub add path path_provider sqlite3
+
       - name: Inject client source
         run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
 
@@ -46,6 +51,11 @@ jobs:
 
       - name: Create Flutter app skeleton
         run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
+
+      - name: Add desktop db dependencies
+        run: |
+          cd client/flutter_client_build
+          flutter pub add path path_provider sqlite3
 
       - name: Inject client source
         run: copy client\\flutter_client_source\\lib\\main.dart client\\flutter_client_build\\lib\\main.dart
@@ -76,6 +86,11 @@ jobs:
       - name: Create Flutter app skeleton
         run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
 
+      - name: Add desktop db dependencies
+        run: |
+          cd client/flutter_client_build
+          flutter pub add path path_provider sqlite3
+
       - name: Inject client source
         run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
 
@@ -100,9 +115,24 @@ jobs:
       - name: Create Flutter app skeleton
         run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
 
+      - name: Add desktop db dependencies
+        run: |
+          cd client/flutter_client_build
+          flutter pub add path path_provider sqlite3
+
       - name: Inject client source
         run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
 
       - name: Build iOS (no codesign)
         working-directory: client/flutter_client_build
         run: flutter build ios --no-codesign
+
+      - name: Archive iOS app directory (no-codesign)
+        run: |
+          cd client/flutter_client_build/build/ios/iphoneos
+          zip -r ../../../../ios-no-codesign-app.zip Runner.app
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter-ios-no-codesign-app
+          path: client/flutter_client_build/ios-no-codesign-app.zip

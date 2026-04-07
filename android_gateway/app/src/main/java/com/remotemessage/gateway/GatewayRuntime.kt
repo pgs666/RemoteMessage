@@ -26,9 +26,17 @@ data class GatewayConfig(
 
 object GatewayRuntime {
     private val client = OkHttpClient()
+    private var db: GatewayLocalDb? = null
     private const val PREF = "gateway_crypto"
     private const val KEY_PUBLIC = "public_key"
     private const val KEY_PRIVATE = "private_key"
+
+    private fun getDb(context: Context): GatewayLocalDb {
+        if (db == null) {
+            db = GatewayLocalDb(context.applicationContext)
+        }
+        return db!!
+    }
 
     fun registerGateway(context: Context, cfg: GatewayConfig, callback: (String) -> Unit) {
         thread {
@@ -62,6 +70,7 @@ object GatewayRuntime {
                     .build()
                 client.newCall(req).execute().use { resp ->
                     if (resp.code == 204) {
+                        flushPendingUploads(context, cfg)
                         callback("No pending message")
                         return@thread
                     }
@@ -74,6 +83,7 @@ object GatewayRuntime {
                     val phone = payload.getString("targetPhone")
                     val text = payload.getString("content")
                     SmsManager.getDefault().sendTextMessage(phone, null, text, null, null)
+                    flushPendingUploads(context, cfg)
                     callback("SMS sent to $phone")
                 }
             }.onFailure {
@@ -91,9 +101,28 @@ object GatewayRuntime {
         direction: String = "inbound",
         messageId: String? = null
     ) {
+        getDb(context).enqueueUpload(phone, content, timestamp, direction, messageId)
         thread {
             runCatching {
-                uploadInboundSmsSync(cfg, phone, content, timestamp, direction, messageId)
+                flushPendingUploads(context, cfg)
+            }
+        }
+    }
+
+    fun flushPendingUploads(context: Context, cfg: GatewayConfig) {
+        val local = getDb(context)
+        val pending = local.listPending(200)
+        pending.forEach { item ->
+            runCatching {
+                uploadInboundSmsSync(
+                    cfg = cfg,
+                    phone = item.phone,
+                    content = item.content,
+                    timestamp = item.timestamp,
+                    direction = item.direction,
+                    messageId = item.messageId
+                )
+                local.deletePending(item.id)
             }
         }
     }

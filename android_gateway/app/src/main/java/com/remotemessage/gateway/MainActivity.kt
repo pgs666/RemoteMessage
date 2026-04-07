@@ -29,6 +29,7 @@ class MainActivity : ComponentActivity() {
         val btnRegister = findViewById<Button>(R.id.btnRegister)
         val btnPollOnce = findViewById<Button>(R.id.btnPollOnce)
         val btnSyncHistory = findViewById<Button>(R.id.btnSyncHistory)
+        val btnFlushPending = findViewById<Button>(R.id.btnFlushPending)
 
         editServer.setText(pref.getString("server_base", "http://10.0.2.2:5000") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
@@ -71,6 +72,17 @@ class MainActivity : ComponentActivity() {
             GatewayRuntime.syncHistoricalSms(this, cfg) {
                 runOnUiThread { textStatus.text = it }
             }
+        }
+
+        btnFlushPending.setOnClickListener {
+            val cfg = GatewayConfig(
+                serverBaseUrl = editServer.text.toString().trim(),
+                deviceId = editDeviceId.text.toString().trim()
+            )
+            Thread {
+                GatewayRuntime.flushPendingUploads(this, cfg)
+                runOnUiThread { textStatus.text = "Pending uploads flushed" }
+            }.start()
         }
     }
 
