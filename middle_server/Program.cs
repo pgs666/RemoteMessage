@@ -6,6 +6,8 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
+var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+
 var httpsSettings = new HttpsCertificateSettings();
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options =>
@@ -70,7 +72,7 @@ app.MapPost("/api/gateway/sms/upload", (UploadSmsRequest req, CryptoState crypto
     try
     {
         var plain = crypto.DecryptWithServerPrivateKey(req.EncryptedPayloadBase64);
-        var payload = JsonSerializer.Deserialize<GatewaySmsPayload>(plain);
+        var payload = JsonSerializer.Deserialize<GatewaySmsPayload>(plain, jsonOptions);
         if (payload is null)
         {
             return Results.BadRequest("invalid payload");
