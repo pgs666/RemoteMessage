@@ -1,6 +1,8 @@
 package com.remotemessage.gateway
 
 import android.content.Context
+import android.security.keystore.KeyGenParameterSpec
+import android.security.keystore.KeyProperties
 import android.provider.Telephony
 import android.telephony.SubscriptionManager
 import android.telephony.SmsManager
@@ -16,7 +18,6 @@ import java.security.KeyPairGenerator
 import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.PublicKey
-import java.security.Security
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.security.cert.CertificateFactory
@@ -38,6 +39,7 @@ object GatewayRuntime {
     private const val PREF = "gateway_crypto"
     private const val KEY_PUBLIC = "public_key"
     private const val KEY_PRIVATE = "private_key"
+    private const val KEYSTORE_ALIAS = "remote_message_gateway_rsa"
 
     private fun getDb(context: Context): GatewayLocalDb {
         if (db == null) {
@@ -294,31 +296,26 @@ object GatewayRuntime {
             return pub to pri
         }
 
-        val kpg = createSoftwareRsaKeyPairGenerator()
-        kpg.initialize(2048)
-        val pair = kpg.generateKeyPair()
-        val pubPem = toPem("PUBLIC KEY", pair.public.encoded)
-        val priPem = toPem("PRIVATE KEY", pair.private.encoded)
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        if (!keyStore.containsAlias(KEYSTORE_ALIAS)) {
+            val kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, "AndroidKeyStore")
+            val spec = KeyGenParameterSpec.Builder(
+                KEYSTORE_ALIAS,
+                KeyProperties.PURPOSE_DECRYPT or KeyProperties.PURPOSE_ENCRYPT
+            )
+                .setKeySize(2048)
+                .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA512)
+                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_OAEP)
+                .build()
+            kpg.initialize(spec)
+            kpg.generateKeyPair()
+        }
+
+        val cert = keyStore.getCertificate(KEYSTORE_ALIAS) ?: error("android keystore certificate missing")
+        val pubPem = toPem("PUBLIC KEY", cert.publicKey.encoded)
+        val priPem = "android-keystore:$KEYSTORE_ALIAS"
         pref.edit().putString(KEY_PUBLIC, pubPem).putString(KEY_PRIVATE, priPem).apply()
         return pubPem to priPem
-    }
-
-    private fun createSoftwareRsaKeyPairGenerator(): KeyPairGenerator {
-        val preferredProviders = linkedSetOf("BC", "AndroidOpenSSL", "Conscrypt")
-        preferredProviders.forEach { providerName ->
-            runCatching {
-                return KeyPairGenerator.getInstance("RSA", providerName)
-            }
-        }
-
-        Security.getProviders().forEach { provider ->
-            if (provider.name.equals("AndroidKeyStore", ignoreCase = true)) return@forEach
-            runCatching {
-                return KeyPairGenerator.getInstance("RSA", provider)
-            }
-        }
-
-        return KeyPairGenerator.getInstance("RSA")
     }
 
     private fun encryptByPublicKey(publicPem: String, plain: String): String {
@@ -329,11 +326,22 @@ object GatewayRuntime {
     }
 
     private fun decryptWithPrivateKey(privatePem: String, encryptedBase64: String): String {
-        val key = loadPrivateKey(privatePem)
+        val key = if (privatePem.startsWith("android-keystore:")) {
+            loadPrivateKeyFromAndroidKeystore(privatePem.removePrefix("android-keystore:"))
+        } else {
+            loadPrivateKey(privatePem)
+        }
         val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
         cipher.init(Cipher.DECRYPT_MODE, key)
         val plain = cipher.doFinal(Base64.getDecoder().decode(encryptedBase64))
         return plain.toString(Charsets.UTF_8)
+    }
+
+    private fun loadPrivateKeyFromAndroidKeystore(alias: String): PrivateKey {
+        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+        val entry = keyStore.getEntry(alias, null) as? KeyStore.PrivateKeyEntry
+            ?: error("android keystore private key missing")
+        return entry.privateKey
     }
 
     private fun loadPublicKey(publicPem: String): PublicKey {
