@@ -52,6 +52,15 @@
   - 服务端：`middle_server/data/server.db` 持久化消息、出站队列、置顶会话
   - 网关端：`gateway_private.db` 持久化待上报队列，离线可积压、在线自动补传
   - 客户端：私有 SQLite 文件持久化消息/设置/置顶
+- 网关端增强：
+  - 可申请默认短信角色（Default SMS app）
+  - 可引导电池优化白名单与使用情况访问（保活辅助）
+  - 内网 WebUI（端口 8088，仅 LAN/本机访问）
+  - 双卡可选发送（Subscription ID）
+- 中间服务器增强：
+  - API Key 鉴权（`X-Api-Key`，环境变量 `REMOTE_MESSAGE_API_KEY`）
+  - SQLite 持久化 gateway 注册信息
+  - API 访问日志持久化
 
 ---
 
@@ -80,6 +89,7 @@ gh repo create RemoteMessage --public --source . --remote origin --push
   - 构建：Linux / Windows / Android APK / iOS(no-codesign)
   - Linux job 已补齐 `libgtk-3-dev` 依赖，修复 `gtk+-3.0` 缺失导致的编译失败
   - iOS 产物新增上传 `Runner.app` 压缩包（`flutter-ios-no-codesign-app`）
+  - iOS 产物新增上传 unsigned IPA（`flutter-ios-unsigned-ipa`）
 - `android-gateway.yml`
   - 构建原生 Android 网关 APK
 - `middle-server.yml`
@@ -104,7 +114,10 @@ gh repo create RemoteMessage --public --source . --remote origin --push
 ### 1) Flutter 客户端（Windows / Android / iOS / Linux）
 
 - ✅ 已实现基础功能：
-  - 聊天软件风格 UI（会话列表 + 聊天窗口 + 气泡消息）
+  - 自适应 UI：
+    - 桌面端：会话+聊天平铺
+    - 手机端：会话列表页 -> 聊天详情页
+  - 标题统一为项目名 `RemoteMessage`
   - 新建短信对话（New SMS 弹窗）
   - 设置页（服务器地址、设备ID、主题模式）
   - 自动深色模式（System）与手动 Light/Dark
@@ -128,6 +141,8 @@ gh repo create RemoteMessage --public --source . --remote origin --push
   - 周期自动同步 Worker（网络可用时自动补传并轮询任务）
   - 可选 SIM 子卡发送（Subscription ID）
   - 手动 Flush Pending Uploads 按钮
+  - 内网 WebUI 控制面板（Register/Poll/Sync/Flush）
+  - API Key 配置与请求头注入
 - ✅ CI 失败点已修复：AndroidX 配置已补齐
 - ⚠️ 生产前仍需完善：前台服务保活、重试队列、双卡支持、权限引导细化
 
@@ -140,6 +155,8 @@ gh repo create RemoteMessage --public --source . --remote origin --push
   - 下行任务使用网关公钥加密并供网关拉取
   - `messageId` 去重与 `sinceTs` 增量查询
   - 会话置顶持久化接口
+  - `X-Api-Key` 鉴权 + request 日志
+  - gateway 公钥持久化表（重启后不丢失）
 - ✅ CI 已通过 Linux x64/arm64 发布流程
 - ⚠️ 生产前仍需完善：持久化存储、鉴权、审计日志、限流与告警
 

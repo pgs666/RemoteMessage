@@ -8,15 +8,45 @@ var builder = WebApplication.CreateBuilder(args);
 builder.Services.AddSingleton<CryptoState>();
 builder.Services.AddSingleton<GatewayRegistry>();
 builder.Services.AddSingleton<SqliteRepository>();
+builder.Services.AddSingleton<ApiSecuritySettings>();
 
 var app = builder.Build();
+
+app.Use(async (context, next) =>
+{
+    var repo = context.RequestServices.GetRequiredService<SqliteRepository>();
+    var sec = context.RequestServices.GetRequiredService<ApiSecuritySettings>();
+
+    var path = context.Request.Path.Value ?? string.Empty;
+    var requiresAuth = !path.Equals("/api/crypto/server-public-key", StringComparison.OrdinalIgnoreCase)
+                       && !path.Equals("/healthz", StringComparison.OrdinalIgnoreCase);
+
+    var begin = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+    if (requiresAuth)
+    {
+        var token = context.Request.Headers["X-Api-Key"].ToString();
+        if (!string.Equals(token, sec.ApiKey, StringComparison.Ordinal))
+        {
+            context.Response.StatusCode = StatusCodes.Status401Unauthorized;
+            await context.Response.WriteAsJsonAsync(new { error = "invalid api key" });
+            repo.InsertApiLog(context.Request.Method, path, 401, context.Connection.RemoteIpAddress?.ToString() ?? "unknown", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - begin);
+            return;
+        }
+    }
+
+    await next();
+    repo.InsertApiLog(context.Request.Method, path, context.Response.StatusCode, context.Connection.RemoteIpAddress?.ToString() ?? "unknown", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - begin);
+});
+
+app.MapGet("/healthz", () => Results.Ok(new { ok = true }));
 
 app.MapGet("/api/crypto/server-public-key", (CryptoState crypto) =>
 {
     return Results.Ok(new { publicKey = crypto.ServerPublicKeyPem });
 });
 
-app.MapPost("/api/gateway/register", (RegisterGatewayRequest req, GatewayRegistry registry) =>
+app.MapPost("/api/gateway/register", (RegisterGatewayRequest req, GatewayRegistry registry, SqliteRepository repo) =>
 {
     if (string.IsNullOrWhiteSpace(req.DeviceId) || string.IsNullOrWhiteSpace(req.PublicKeyPem))
     {
@@ -24,6 +54,7 @@ app.MapPost("/api/gateway/register", (RegisterGatewayRequest req, GatewayRegistr
     }
 
     registry.Upsert(req.DeviceId, req.PublicKeyPem);
+    repo.UpsertGateway(req.DeviceId, req.PublicKeyPem);
     return Results.Ok(new { ok = true, req.DeviceId });
 });
 
@@ -84,7 +115,13 @@ app.MapPost("/api/client/send", (SendSmsRequest req, GatewayRegistry registry, S
 {
     if (!registry.TryGetPublicKey(req.DeviceId, out var pem) || string.IsNullOrWhiteSpace(pem))
     {
-        return Results.NotFound("gateway not registered");
+        pem = repo.GetGatewayPublicKey(req.DeviceId);
+        if (string.IsNullOrWhiteSpace(pem))
+        {
+            return Results.NotFound("gateway not registered");
+        }
+
+        registry.Upsert(req.DeviceId, pem);
     }
 
     var instruction = new OutboundInstruction(req.TargetPhone, req.Content);
@@ -181,6 +218,20 @@ public sealed class GatewayRegistry
         lock (_lock)
         {
             return _pubKeys.TryGetValue(deviceId, out pem);
+        }
+    }
+}
+
+public sealed class ApiSecuritySettings
+{
+    public string ApiKey { get; }
+
+    public ApiSecuritySettings()
+    {
+        ApiKey = Environment.GetEnvironmentVariable("REMOTE_MESSAGE_API_KEY")?.Trim();
+        if (string.IsNullOrWhiteSpace(ApiKey))
+        {
+            ApiKey = "change-me-in-production";
         }
     }
 }
@@ -305,6 +356,48 @@ VALUES($deviceId, $payload, $ts);";
         cmd.ExecuteNonQuery();
     }
 
+    public void UpsertGateway(string deviceId, string publicKeyPem)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+INSERT INTO gateways(device_id, public_key_pem, updated_at)
+VALUES($deviceId, $pem, $ts)
+ON CONFLICT(device_id) DO UPDATE SET
+  public_key_pem = excluded.public_key_pem,
+  updated_at = excluded.updated_at;";
+        cmd.Parameters.AddWithValue("$deviceId", deviceId);
+        cmd.Parameters.AddWithValue("$pem", publicKeyPem);
+        cmd.Parameters.AddWithValue("$ts", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.ExecuteNonQuery();
+    }
+
+    public string? GetGatewayPublicKey(string deviceId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT public_key_pem FROM gateways WHERE device_id = $deviceId LIMIT 1;";
+        cmd.Parameters.AddWithValue("$deviceId", deviceId);
+        var v = cmd.ExecuteScalar();
+        return v?.ToString();
+    }
+
+    public void InsertApiLog(string method, string path, int statusCode, string remoteIp, long durationMs)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+INSERT INTO api_logs(method, path, status_code, remote_ip, duration_ms, created_at)
+VALUES($method, $path, $status, $ip, $duration, $ts);";
+        cmd.Parameters.AddWithValue("$method", method);
+        cmd.Parameters.AddWithValue("$path", path);
+        cmd.Parameters.AddWithValue("$status", statusCode);
+        cmd.Parameters.AddWithValue("$ip", remoteIp);
+        cmd.Parameters.AddWithValue("$duration", durationMs);
+        cmd.Parameters.AddWithValue("$ts", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        cmd.ExecuteNonQuery();
+    }
+
     public PendingOutbound? DequeueOutbound(string deviceId)
     {
         using var conn = Open();
@@ -376,9 +469,26 @@ CREATE TABLE IF NOT EXISTS pinned_conversations(
     pinned_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS gateways(
+    device_id TEXT PRIMARY KEY,
+    public_key_pem TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS api_logs(
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    method TEXT NOT NULL,
+    path TEXT NOT NULL,
+    status_code INTEGER NOT NULL,
+    remote_ip TEXT NOT NULL,
+    duration_ms INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_phone_ts ON messages(phone, timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 CREATE INDEX IF NOT EXISTS idx_outbox_device_id ON outbox(device_id);
+CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
 ";
         cmd.ExecuteNonQuery();
     }

@@ -265,156 +265,209 @@ class _MessageHomePageState extends State<MessageHomePage> {
 
   @override
   Widget build(BuildContext context) {
+    final isMobile = MediaQuery.of(context).size.width < 900;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('RemoteMessage Chat'),
+        title: const Text('RemoteMessage'),
         actions: [
           IconButton(onPressed: _loading ? null : _openSettings, icon: const Icon(Icons.settings), tooltip: 'Settings'),
           IconButton(onPressed: _loading ? null : _createNewConversation, icon: const Icon(Icons.add_comment_outlined), tooltip: 'New SMS'),
           IconButton(onPressed: _loading ? null : () => _syncInbox(), icon: const Icon(Icons.refresh), tooltip: 'Sync'),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(12),
-        child: Column(
-          children: [
-            Row(
+      body: isMobile ? _buildMobileBody() : _buildDesktopBody(),
+    );
+  }
+
+  Widget _buildTopBar() {
+    return Row(
+      children: [
+        Expanded(
+          child: TextField(
+            controller: _searchCtrl,
+            decoration: const InputDecoration(
+              labelText: 'Search conversation / message',
+              prefixIcon: Icon(Icons.search),
+              border: OutlineInputBorder(),
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        FilledButton(
+          onPressed: _loading ? null : () => _syncInbox(fullSync: true),
+          child: const Text('Load All'),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildDesktopBody() {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          _buildTopBar(),
+          const SizedBox(height: 8),
+          Align(alignment: Alignment.centerLeft, child: Text('Status: $_status')),
+          const SizedBox(height: 8),
+          Expanded(
+            child: Row(
+              children: [
+                SizedBox(width: 320, child: _buildConversationList(onMobileTap: false)),
+                const SizedBox(width: 8),
+                Expanded(child: _buildChatPanel()),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildMobileBody() {
+    return Padding(
+      padding: const EdgeInsets.all(12),
+      child: Column(
+        children: [
+          _buildTopBar(),
+          const SizedBox(height: 8),
+          Align(alignment: Alignment.centerLeft, child: Text('Status: $_status')),
+          const SizedBox(height: 8),
+          Expanded(child: _buildConversationList(onMobileTap: true)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildConversationList({required bool onMobileTap}) {
+    return Card(
+      child: FutureBuilder<List<ConversationSummary>>(
+        future: _conversations(),
+        builder: (context, snap) {
+          final data = snap.data ?? const <ConversationSummary>[];
+          if (data.isEmpty) return const Center(child: Text('No conversations'));
+          return ListView.builder(
+            itemCount: data.length,
+            itemBuilder: (context, index) {
+              final c = data[index];
+              final selected = c.phone == _activePhone;
+              return ListTile(
+                selected: selected,
+                leading: c.pinned ? const Icon(Icons.push_pin, size: 18) : null,
+                title: Text(c.phone),
+                subtitle: Text(c.lastMessage.content, maxLines: 1, overflow: TextOverflow.ellipsis),
+                onTap: () async {
+                  _activePhone = c.phone;
+                  await _db.setMetaString('activePhone', c.phone);
+                  if (onMobileTap && context.mounted) {
+                    await Navigator.push(
+                      context,
+                      MaterialPageRoute(builder: (_) => MobileChatPage(parent: this, phone: c.phone)),
+                    );
+                  }
+                  setState(() {});
+                },
+                trailing: IconButton(
+                  icon: Icon(c.pinned ? Icons.push_pin : Icons.push_pin_outlined),
+                  onPressed: () => _setPin(c.phone, !c.pinned),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+
+  Widget _buildChatPanel() {
+    return Card(
+      child: Column(
+        children: [
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            child: Text(_activePhone == null ? 'Select conversation' : 'Chat with $_activePhone'),
+          ),
+          const Divider(height: 1),
+          Expanded(
+            child: FutureBuilder<List<SmsItem>>(
+              future: _activeMessages(),
+              builder: (context, snap) {
+                final messages = snap.data ?? const <SmsItem>[];
+                if (messages.isEmpty) return const Center(child: Text('No messages'));
+                return ListView.builder(
+                  itemCount: messages.length,
+                  itemBuilder: (context, index) {
+                    final m = messages[index];
+                    final mine = m.direction == 'outbound';
+                    return Align(
+                      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.all(10),
+                        constraints: const BoxConstraints(maxWidth: 460),
+                        decoration: BoxDecoration(
+                          color: mine
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : Theme.of(context).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                          children: [
+                            Text(m.content),
+                            const SizedBox(height: 4),
+                            Text(
+                              DateTime.fromMillisecondsSinceEpoch(m.timestamp).toLocal().toString(),
+                              style: Theme.of(context).textTheme.bodySmall,
+                            ),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                );
+              },
+            ),
+          ),
+          const Divider(height: 1),
+          Padding(
+            padding: const EdgeInsets.all(8),
+            child: Row(
               children: [
                 Expanded(
                   child: TextField(
-                    controller: _searchCtrl,
-                    decoration: const InputDecoration(
-                      labelText: 'Search conversation / message',
-                      prefixIcon: Icon(Icons.search),
-                      border: OutlineInputBorder(),
-                    ),
+                    controller: _composerCtrl,
+                    decoration: const InputDecoration(hintText: 'Type a message...', border: OutlineInputBorder()),
                   ),
                 ),
                 const SizedBox(width: 8),
-                FilledButton(
-                  onPressed: _loading ? null : () => _syncInbox(fullSync: true),
-                  child: const Text('Load All'),
-                ),
+                FilledButton(onPressed: _loading ? null : _sendSmsToActive, child: const Text('Send')),
               ],
             ),
-            const SizedBox(height: 8),
-            Align(alignment: Alignment.centerLeft, child: Text('Status: $_status')),
-            const SizedBox(height: 8),
-            Expanded(
-              child: Row(
-                children: [
-                  SizedBox(
-                    width: 320,
-                    child: Card(
-                      child: FutureBuilder<List<ConversationSummary>>(
-                        future: _conversations(),
-                        builder: (context, snap) {
-                          final data = snap.data ?? const <ConversationSummary>[];
-                          if (data.isEmpty) return const Center(child: Text('No conversations'));
-                          return ListView.builder(
-                            itemCount: data.length,
-                            itemBuilder: (context, index) {
-                              final c = data[index];
-                              final selected = c.phone == _activePhone;
-                              return ListTile(
-                                selected: selected,
-                                leading: c.pinned ? const Icon(Icons.push_pin, size: 18) : null,
-                                title: Text(c.phone),
-                                subtitle: Text(c.lastMessage.content, maxLines: 1, overflow: TextOverflow.ellipsis),
-                                onTap: () async {
-                                  _activePhone = c.phone;
-                                  await _db.setMetaString('activePhone', c.phone);
-                                  setState(() {});
-                                },
-                                trailing: IconButton(
-                                  icon: Icon(c.pinned ? Icons.push_pin : Icons.push_pin_outlined),
-                                  onPressed: () => _setPin(c.phone, !c.pinned),
-                                ),
-                              );
-                            },
-                          );
-                        },
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Card(
-                      child: Column(
-                        children: [
-                          Container(
-                            width: double.infinity,
-                            padding: const EdgeInsets.all(12),
-                            child: Text(_activePhone == null ? 'Select conversation' : 'Chat with $_activePhone'),
-                          ),
-                          const Divider(height: 1),
-                          Expanded(
-                            child: FutureBuilder<List<SmsItem>>(
-                              future: _activeMessages(),
-                              builder: (context, snap) {
-                                final messages = snap.data ?? const <SmsItem>[];
-                                if (messages.isEmpty) return const Center(child: Text('No messages'));
-                                return ListView.builder(
-                                  itemCount: messages.length,
-                                  itemBuilder: (context, index) {
-                                    final m = messages[index];
-                                    final mine = m.direction == 'outbound';
-                                    return Align(
-                                      alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-                                      child: Container(
-                                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                                        padding: const EdgeInsets.all(10),
-                                        constraints: const BoxConstraints(maxWidth: 460),
-                                        decoration: BoxDecoration(
-                                          color: mine
-                                              ? Theme.of(context).colorScheme.primaryContainer
-                                              : Theme.of(context).colorScheme.surfaceContainerHighest,
-                                          borderRadius: BorderRadius.circular(12),
-                                        ),
-                                        child: Column(
-                                          crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                                          children: [
-                                            Text(m.content),
-                                            const SizedBox(height: 4),
-                                            Text(
-                                              DateTime.fromMillisecondsSinceEpoch(m.timestamp).toLocal().toString(),
-                                              style: Theme.of(context).textTheme.bodySmall,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    );
-                                  },
-                                );
-                              },
-                            ),
-                          ),
-                          const Divider(height: 1),
-                          Padding(
-                            padding: const EdgeInsets.all(8),
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: TextField(
-                                    controller: _composerCtrl,
-                                    decoration: const InputDecoration(hintText: 'Type a message...', border: OutlineInputBorder()),
-                                  ),
-                                ),
-                                const SizedBox(width: 8),
-                                FilledButton(onPressed: _loading ? null : _sendSmsToActive, child: const Text('Send')),
-                              ],
-                            ),
-                          )
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-        ),
+          )
+        ],
       ),
+    );
+  }
+}
+
+class MobileChatPage extends StatefulWidget {
+  final _MessageHomePageState parent;
+  final String phone;
+  const MobileChatPage({super.key, required this.parent, required this.phone});
+
+  @override
+  State<MobileChatPage> createState() => _MobileChatPageState();
+}
+
+class _MobileChatPageState extends State<MobileChatPage> {
+  @override
+  Widget build(BuildContext context) {
+    widget.parent._activePhone = widget.phone;
+    return Scaffold(
+      appBar: AppBar(title: Text(widget.phone)),
+      body: widget.parent._buildChatPanel(),
     );
   }
 }

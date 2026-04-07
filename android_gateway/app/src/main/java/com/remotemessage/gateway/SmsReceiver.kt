@@ -12,9 +12,11 @@ class SmsReceiver : BroadcastReceiver() {
         val prefs = context.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
         val server = prefs.getString("server_base", "") ?: ""
         val deviceId = prefs.getString("device_id", "") ?: ""
+        val simSubId = prefs.getString("sim_sub_id", "")?.toIntOrNull()
+        RuntimeConfig.apiKey = prefs.getString("api_key", "")?.ifBlank { null }
         if (server.isBlank() || deviceId.isBlank()) return
 
-        val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId)
+        val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId, simSubId = simSubId)
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
         messages.forEach { sms ->
             val direction = "inbound"

@@ -7,6 +7,7 @@ import android.telephony.SmsManager
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Interceptor
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import java.security.KeyFactory
@@ -27,7 +28,17 @@ data class GatewayConfig(
 )
 
 object GatewayRuntime {
-    private val client = OkHttpClient()
+    private val client = OkHttpClient.Builder()
+        .addInterceptor(Interceptor { chain ->
+            val original = chain.request()
+            val req = original.newBuilder()
+            val apiKey = RuntimeConfig.apiKey?.trim()
+            if (!apiKey.isNullOrEmpty()) {
+                req.header("X-Api-Key", apiKey)
+            }
+            chain.proceed(req.build())
+        })
+        .build()
     private var db: GatewayLocalDb? = null
     private const val PREF = "gateway_crypto"
     private const val KEY_PUBLIC = "public_key"
@@ -280,4 +291,9 @@ object GatewayRuntime {
             .replace("\n", "")
             .trim()
     }
+}
+
+object RuntimeConfig {
+    @Volatile
+    var apiKey: String? = null
 }

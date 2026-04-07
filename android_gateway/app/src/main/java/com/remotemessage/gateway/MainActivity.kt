@@ -12,10 +12,12 @@ import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import fi.iki.elonen.NanoHTTPD
 
 class MainActivity : ComponentActivity() {
 
     private lateinit var pref: SharedPreferences
+    private var webUiServer: GatewayWebUiServer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,6 +27,7 @@ class MainActivity : ComponentActivity() {
         val editServer = findViewById<EditText>(R.id.editServer)
         val editDeviceId = findViewById<EditText>(R.id.editDeviceId)
         val editSimSubId = findViewById<EditText>(R.id.editSimSubId)
+        val editApiKey = findViewById<EditText>(R.id.editApiKey)
         val textStatus = findViewById<TextView>(R.id.textStatus)
         val btnSave = findViewById<Button>(R.id.btnSave)
         val btnRegister = findViewById<Button>(R.id.btnRegister)
@@ -35,24 +38,35 @@ class MainActivity : ComponentActivity() {
         editServer.setText(pref.getString("server_base", "http://10.0.2.2:5000") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
         editSimSubId.setText(pref.getString("sim_sub_id", "") ?: "")
+        editApiKey.setText(pref.getString("api_key", "") ?: "")
+
+        RuntimeConfig.apiKey = editApiKey.text.toString().trim().ifBlank { null }
 
         requestPermissionsIfNeeded()
+        PermissionAndRoleHelper.requestDefaultSmsRole(this)
+        PermissionAndRoleHelper.requestIgnoreBatteryOptimizations(this)
+        PermissionAndRoleHelper.openUsageAccessSettings(this)
         GatewaySyncWorker.schedule(this)
+        startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, textStatus)
 
         btnSave.setOnClickListener {
             pref.edit()
                 .putString("server_base", editServer.text.toString().trim())
                 .putString("device_id", editDeviceId.text.toString().trim())
                 .putString("sim_sub_id", editSimSubId.text.toString().trim())
+                .putString("api_key", editApiKey.text.toString().trim())
                 .apply()
+            RuntimeConfig.apiKey = editApiKey.text.toString().trim().ifBlank { null }
             GatewaySyncWorker.schedule(this)
+            restartWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, textStatus)
             textStatus.text = "Saved + Auto Sync scheduled"
         }
 
         btnRegister.setOnClickListener {
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
-                deviceId = editDeviceId.text.toString().trim()
+                deviceId = editDeviceId.text.toString().trim(),
+                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
             )
             GatewayRuntime.registerGateway(this, cfg) {
                 runOnUiThread { textStatus.text = it }
@@ -93,6 +107,88 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread { textStatus.text = "Pending uploads flushed" }
             }.start()
         }
+    }
+
+    private fun startWebUiServer(
+        editServer: EditText,
+        editDeviceId: EditText,
+        editSimSubId: EditText,
+        editApiKey: EditText,
+        textStatus: TextView
+    ) {
+        if (webUiServer != null) return
+        webUiServer = GatewayWebUiServer(
+            context = this,
+            readConfig = {
+                GatewayConfig(
+                    serverBaseUrl = editServer.text.toString().trim(),
+                    deviceId = editDeviceId.text.toString().trim(),
+                    simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                )
+            },
+            onAction = { action ->
+                RuntimeConfig.apiKey = editApiKey.text.toString().trim().ifBlank { null }
+                val cfg = GatewayConfig(
+                    serverBaseUrl = editServer.text.toString().trim(),
+                    deviceId = editDeviceId.text.toString().trim(),
+                    simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                )
+                when (action) {
+                    "register" -> {
+                        GatewayRuntime.registerGateway(this, cfg) {
+                            runOnUiThread { textStatus.text = it }
+                        }
+                        "register triggered"
+                    }
+
+                    "poll" -> {
+                        GatewayRuntime.pollAndSend(this, cfg) {
+                            runOnUiThread { textStatus.text = it }
+                        }
+                        "poll triggered"
+                    }
+
+                    "syncHistory" -> {
+                        GatewayRuntime.syncHistoricalSms(this, cfg) {
+                            runOnUiThread { textStatus.text = it }
+                        }
+                        "history sync triggered"
+                    }
+
+                    "flushPending" -> {
+                        GatewayRuntime.flushPendingUploads(this, cfg)
+                        "pending flushed"
+                    }
+
+                    else -> "unknown action"
+                }
+            }
+        )
+
+        runCatching {
+            webUiServer?.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            textStatus.text = "WebUI on LAN: http://<phone-ip>:8088"
+        }.onFailure {
+            textStatus.text = "WebUI start failed: ${it.message}"
+        }
+    }
+
+    private fun restartWebUiServer(
+        editServer: EditText,
+        editDeviceId: EditText,
+        editSimSubId: EditText,
+        editApiKey: EditText,
+        textStatus: TextView
+    ) {
+        webUiServer?.stop()
+        webUiServer = null
+        startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, textStatus)
+    }
+
+    override fun onDestroy() {
+        webUiServer?.stop()
+        webUiServer = null
+        super.onDestroy()
     }
 
     private fun requestPermissionsIfNeeded() {
