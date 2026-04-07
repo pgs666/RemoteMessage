@@ -1,0 +1,40 @@
+name: middle-server-ci
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        rid: [linux-x64, linux-arm64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Restore
+        run: dotnet restore middle_server/RemoteMessage.MiddleServer.csproj
+
+      - name: Publish (${{ matrix.rid }})
+        run: >-
+          dotnet publish middle_server/RemoteMessage.MiddleServer.csproj
+          -c Release
+          -r ${{ matrix.rid }}
+          --self-contained false
+          -o artifacts/middle-server/${{ matrix.rid }}
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: middle-server-${{ matrix.rid }}
+          path: artifacts/middle-server/${{ matrix.rid }}

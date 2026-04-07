@@ -1,0 +1,30 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Flutter
+**/.dart_tool/
+**/build/
+**/.flutter-plugins
+**/.flutter-plugins-dependencies
+**/.packages
+
+# Android
+**/.gradle/
+**/local.properties
+**/captures/
+
+# .NET
+**/bin/
+**/obj/
+
+# Secrets
+*.keystore
+*.jks
+*.p12
+*.pem

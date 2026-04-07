@@ -1,0 +1,103 @@
+name: flutter-client-ci
+
+on:
+  push:
+    branches: ["main", "master"]
+  pull_request:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter app skeleton
+        run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
+
+      - name: Inject client source
+        run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
+
+      - name: Build Linux
+        working-directory: client/flutter_client_build
+        run: flutter build linux
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter-linux
+          path: client/flutter_client_build/build/linux/x64/release/bundle
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter app skeleton
+        run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
+
+      - name: Inject client source
+        run: copy client\\flutter_client_source\\lib\\main.dart client\\flutter_client_build\\lib\\main.dart
+
+      - name: Build Windows
+        working-directory: client/flutter_client_build
+        run: flutter build windows
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter-windows
+          path: client/flutter_client_build/build/windows/x64/runner/Release
+
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter app skeleton
+        run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
+
+      - name: Inject client source
+        run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
+
+      - name: Build APK
+        working-directory: client/flutter_client_build
+        run: flutter build apk --debug
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: flutter-android-apk
+          path: client/flutter_client_build/build/app/outputs/flutter-apk/app-debug.apk
+
+  build-ios:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+
+      - name: Create Flutter app skeleton
+        run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
+
+      - name: Inject client source
+        run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
+
+      - name: Build iOS (no codesign)
+        working-directory: client/flutter_client_build
+        run: flutter build ios --no-codesign
