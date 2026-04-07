@@ -10,7 +10,7 @@ var httpsSettings = new HttpsCertificateSettings();
 var builder = WebApplication.CreateBuilder(args);
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(httpsSettings.HttpsPort, listen => listen.UseHttps(httpsSettings.Certificate));
+    options.Listen(IPAddress.Any, httpsSettings.HttpsPort, listen => listen.UseHttps(httpsSettings.Certificate));
 });
 builder.Services.AddSingleton<CryptoState>();
 builder.Services.AddSingleton<GatewayRegistry>();
