@@ -24,6 +24,7 @@ class MainActivity : ComponentActivity() {
         pref = getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
         val editServer = findViewById<EditText>(R.id.editServer)
         val editDeviceId = findViewById<EditText>(R.id.editDeviceId)
+        val editSimSubId = findViewById<EditText>(R.id.editSimSubId)
         val textStatus = findViewById<TextView>(R.id.textStatus)
         val btnSave = findViewById<Button>(R.id.btnSave)
         val btnRegister = findViewById<Button>(R.id.btnRegister)
@@ -33,15 +34,19 @@ class MainActivity : ComponentActivity() {
 
         editServer.setText(pref.getString("server_base", "http://10.0.2.2:5000") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
+        editSimSubId.setText(pref.getString("sim_sub_id", "") ?: "")
 
         requestPermissionsIfNeeded()
+        GatewaySyncWorker.schedule(this)
 
         btnSave.setOnClickListener {
             pref.edit()
                 .putString("server_base", editServer.text.toString().trim())
                 .putString("device_id", editDeviceId.text.toString().trim())
+                .putString("sim_sub_id", editSimSubId.text.toString().trim())
                 .apply()
-            textStatus.text = "Saved"
+            GatewaySyncWorker.schedule(this)
+            textStatus.text = "Saved + Auto Sync scheduled"
         }
 
         btnRegister.setOnClickListener {
@@ -52,12 +57,14 @@ class MainActivity : ComponentActivity() {
             GatewayRuntime.registerGateway(this, cfg) {
                 runOnUiThread { textStatus.text = it }
             }
+            GatewaySyncWorker.schedule(this)
         }
 
         btnPollOnce.setOnClickListener {
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
-                deviceId = editDeviceId.text.toString().trim()
+                deviceId = editDeviceId.text.toString().trim(),
+                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
             )
             GatewayRuntime.pollAndSend(this, cfg) {
                 runOnUiThread { textStatus.text = it }
@@ -67,7 +74,8 @@ class MainActivity : ComponentActivity() {
         btnSyncHistory.setOnClickListener {
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
-                deviceId = editDeviceId.text.toString().trim()
+                deviceId = editDeviceId.text.toString().trim(),
+                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
             )
             GatewayRuntime.syncHistoricalSms(this, cfg) {
                 runOnUiThread { textStatus.text = it }
@@ -77,7 +85,8 @@ class MainActivity : ComponentActivity() {
         btnFlushPending.setOnClickListener {
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
-                deviceId = editDeviceId.text.toString().trim()
+                deviceId = editDeviceId.text.toString().trim(),
+                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
             )
             Thread {
                 GatewayRuntime.flushPendingUploads(this, cfg)

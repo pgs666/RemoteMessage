@@ -51,7 +51,7 @@
 - 三端持久化（私有 SQLite 思路）：
   - 服务端：`middle_server/data/server.db` 持久化消息、出站队列、置顶会话
   - 网关端：`gateway_private.db` 持久化待上报队列，离线可积压、在线自动补传
-  - 客户端：私有本地数据库文件（当前以 sqlite-like JSON 落地）持久化消息/设置/置顶
+  - 客户端：私有 SQLite 文件持久化消息/设置/置顶
 
 ---
 
@@ -111,6 +111,7 @@ gh repo create RemoteMessage --public --source . --remote origin --push
   - 增量同步与全量加载（`sinceTs` / Load All）
   - 本地缓存去重（按 `messageId`），避免重复获取同一短信
   - 会话搜索 + 置顶（本地优先，服务端接口同步）
+  - 本地 SQLite 持久化（消息、元信息、置顶、设置）
   - 发送短信任务（`/api/client/send`）
 - ⚠️ 当前状态：**MVP+**（已具备聊天体验与缓存）
 - 🔧 后续建议：SQLite 持久化、消息已送达状态、搜索/置顶会话
@@ -124,6 +125,8 @@ gh repo create RemoteMessage --public --source . --remote origin --push
   - 历史短信同步按钮（读取系统短信并批量上报）
   - 上报时附带 `messageId` + `direction` 便于服务端去重
   - 本地私有SQLite待上报队列（弱网重试）
+  - 周期自动同步 Worker（网络可用时自动补传并轮询任务）
+  - 可选 SIM 子卡发送（Subscription ID）
   - 手动 Flush Pending Uploads 按钮
 - ✅ CI 失败点已修复：AndroidX 配置已补齐
 - ⚠️ 生产前仍需完善：前台服务保活、重试队列、双卡支持、权限引导细化

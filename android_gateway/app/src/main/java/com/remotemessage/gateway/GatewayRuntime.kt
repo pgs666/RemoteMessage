@@ -2,6 +2,7 @@ package com.remotemessage.gateway
 
 import android.content.Context
 import android.provider.Telephony
+import android.telephony.SubscriptionManager
 import android.telephony.SmsManager
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
@@ -21,7 +22,8 @@ import kotlin.concurrent.thread
 
 data class GatewayConfig(
     val serverBaseUrl: String,
-    val deviceId: String
+    val deviceId: String,
+    val simSubId: Int? = null
 )
 
 object GatewayRuntime {
@@ -82,7 +84,12 @@ object GatewayRuntime {
                     val payload = JSONObject(plain)
                     val phone = payload.getString("targetPhone")
                     val text = payload.getString("content")
-                    SmsManager.getDefault().sendTextMessage(phone, null, text, null, null)
+                    val smsManager = when (val subId = cfg.simSubId) {
+                        null -> SmsManager.getDefault()
+                        SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
+                        else -> SmsManager.getSmsManagerForSubscriptionId(subId)
+                    }
+                    smsManager.sendTextMessage(phone, null, text, null, null)
                     flushPendingUploads(context, cfg)
                     callback("SMS sent to $phone")
                 }
