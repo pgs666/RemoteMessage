@@ -6,8 +6,8 @@ import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.provider.Telephony
 import android.provider.Settings
-import android.telephony.Telephony
 
 object PermissionAndRoleHelper {
     fun requestDefaultSmsRole(activity: Activity) {
