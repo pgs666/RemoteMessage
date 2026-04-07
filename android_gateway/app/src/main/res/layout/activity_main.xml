@@ -13,21 +13,21 @@
             android:id="@+id/editServer"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:hint="Server Base URL" />
+            android:hint="@string/hint_server_base_url" />
 
         <EditText
             android:id="@+id/editDeviceId"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:hint="Device ID" />
+            android:hint="@string/hint_device_id" />
 
         <EditText
             android:id="@+id/editSimSubId"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:hint="SIM Subscription ID (optional)"
+            android:hint="@string/hint_sim_sub_id"
             android:inputType="number" />
 
         <EditText
@@ -35,7 +35,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:hint="API Key"
+            android:hint="@string/hint_api_key"
             android:inputType="textPassword" />
 
         <LinearLayout
@@ -49,21 +49,21 @@
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Save" />
+                android:text="@string/btn_save" />
 
             <Button
                 android:id="@+id/btnRegister"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Register" />
+                android:text="@string/btn_register" />
 
             <Button
                 android:id="@+id/btnPollOnce"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="Poll Once" />
+                android:text="@string/btn_poll_once" />
         </LinearLayout>
 
         <Button
@@ -71,21 +71,21 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Sync Historical SMS" />
+            android:text="@string/btn_sync_history" />
 
         <Button
             android:id="@+id/btnFlushPending"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="Flush Pending Uploads" />
+            android:text="@string/btn_flush_pending" />
 
         <TextView
             android:id="@+id/textStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="12dp"
-            android:text="Ready" />
+            android:text="@string/status_ready" />
     </LinearLayout>
 
 </ScrollView>

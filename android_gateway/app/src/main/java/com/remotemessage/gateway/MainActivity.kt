@@ -59,7 +59,7 @@ class MainActivity : ComponentActivity() {
             RuntimeConfig.apiKey = editApiKey.text.toString().trim().ifBlank { null }
             GatewaySyncWorker.schedule(this)
             restartWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, textStatus)
-            textStatus.text = "Saved + Auto Sync scheduled"
+            textStatus.text = getString(R.string.status_saved_auto_sync)
         }
 
         btnRegister.setOnClickListener {
@@ -104,7 +104,7 @@ class MainActivity : ComponentActivity() {
             )
             Thread {
                 GatewayRuntime.flushPendingUploads(this, cfg)
-                runOnUiThread { textStatus.text = "Pending uploads flushed" }
+                runOnUiThread { textStatus.text = getString(R.string.status_pending_flushed) }
             }.start()
         }
     }
@@ -167,9 +167,9 @@ class MainActivity : ComponentActivity() {
 
         runCatching {
             webUiServer?.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
-            textStatus.text = "WebUI on LAN: http://<phone-ip>:8088"
+            textStatus.text = getString(R.string.status_webui_lan)
         }.onFailure {
-            textStatus.text = "WebUI start failed: ${it.message}"
+            textStatus.text = getString(R.string.status_webui_failed, it.message ?: "unknown")
         }
     }
 

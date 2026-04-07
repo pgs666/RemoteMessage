@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">RemoteMessage 网关</string>
+    <string name="hint_server_base_url">服务器地址</string>
+    <string name="hint_device_id">设备 ID</string>
+    <string name="hint_sim_sub_id">SIM 子卡 ID（可选）</string>
+    <string name="hint_api_key">API 密钥</string>
+    <string name="btn_save">保存</string>
+    <string name="btn_register">注册</string>
+    <string name="btn_poll_once">轮询一次</string>
+    <string name="btn_sync_history">同步历史短信</string>
+    <string name="btn_flush_pending">补传待发送队列</string>
+    <string name="status_ready">就绪</string>
+    <string name="status_saved_auto_sync">已保存并启用自动同步</string>
+    <string name="status_pending_flushed">待上传队列已补传</string>
+    <string name="status_webui_lan">内网 WebUI： http://&lt;手机IP&gt;:8088</string>
+    <string name="status_webui_failed">WebUI 启动失败：%1$s</string>
+</resources>
