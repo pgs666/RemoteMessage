@@ -21,13 +21,13 @@ class GatewaySyncWorker(
         val server = prefs.getString("server_base", "") ?: ""
         val deviceId = prefs.getString("device_id", "") ?: ""
         val simSubId = prefs.getString("sim_sub_id", "")?.toIntOrNull()
-        RuntimeConfig.password = prefs.getString("api_key", "")?.ifBlank { null }
+        RuntimeConfig.password = prefs.getString("password", prefs.getString("api_key", ""))?.ifBlank { null }
         if (server.isBlank() || deviceId.isBlank()) return Result.success()
 
         val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId, simSubId = simSubId)
         return runCatching {
             GatewayRuntime.flushPendingUploads(applicationContext, cfg)
-            GatewayRuntime.pollAndSend(applicationContext, cfg) {}
+            GatewayRuntime.pollAndSendSync(applicationContext, cfg)
             Result.success()
         }.getOrElse {
             Result.retry()

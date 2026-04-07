@@ -4,7 +4,7 @@
     <string name="hint_server_base_url">Server Base URL</string>
     <string name="hint_device_id">Device ID</string>
     <string name="hint_sim_sub_id">SIM Subscription ID (optional)</string>
-    <string name="hint_api_key">API Key</string>
+    <string name="hint_api_key">Password (legacy label)</string>
     <string name="hint_password">Password</string>
     <string name="hint_webui_port">Web UI Port (1024-65535)</string>
     <string name="btn_save">Save</string>
@@ -12,6 +12,7 @@
     <string name="btn_poll_once">Poll Once</string>
     <string name="btn_sync_history">Sync Historical SMS</string>
     <string name="btn_flush_pending">Flush Pending Uploads</string>
+    <string name="btn_import_cert">Import Server Certificate</string>
     <string name="status_ready">Ready</string>
     <string name="status_saved_auto_sync">Saved + Auto Sync scheduled</string>
     <string name="status_pending_flushed">Pending uploads flushed</string>
@@ -21,4 +22,6 @@
     <string name="status_invalid_device">Please input valid device id</string>
     <string name="status_invalid_password">Please input password</string>
     <string name="status_invalid_port">Port must be 1024-65535</string>
+    <string name="status_cert_imported">Certificate imported</string>
+    <string name="status_cert_import_failed">Certificate import failed: %1$s</string>
 </resources>

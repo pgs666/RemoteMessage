@@ -4,12 +4,13 @@ import android.content.Context
 import android.provider.Telephony
 import android.telephony.SubscriptionManager
 import android.telephony.SmsManager
+import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
-import okhttp3.Interceptor
 import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
+import java.security.KeyStore
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
 import java.security.MessageDigest
@@ -17,8 +18,12 @@ import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
+import java.security.cert.CertificateFactory
 import java.util.Base64
 import javax.crypto.Cipher
+import javax.net.ssl.SSLContext
+import javax.net.ssl.TrustManagerFactory
+import javax.net.ssl.X509TrustManager
 import kotlin.concurrent.thread
 
 data class GatewayConfig(
@@ -28,17 +33,6 @@ data class GatewayConfig(
 )
 
 object GatewayRuntime {
-    private val client = OkHttpClient.Builder()
-        .addInterceptor(Interceptor { chain ->
-            val original = chain.request()
-            val req = original.newBuilder()
-            val password = RuntimeConfig.password?.trim()
-            if (!password.isNullOrEmpty()) {
-                req.header("X-Password", password)
-            }
-            chain.proceed(req.build())
-        })
-        .build()
     private var db: GatewayLocalDb? = null
     private const val PREF = "gateway_crypto"
     private const val KEY_PUBLIC = "public_key"
@@ -62,7 +56,7 @@ object GatewayRuntime {
                     .url("${cfg.serverBaseUrl}/api/gateway/register")
                     .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
                     .build()
-                client.newCall(req).execute().use {
+                httpClient(context, cfg).newCall(req).execute().use {
                     if (!it.isSuccessful) error("register failed: ${it.code}")
                 }
             }.onSuccess {
@@ -76,37 +70,44 @@ object GatewayRuntime {
     fun pollAndSend(context: Context, cfg: GatewayConfig, callback: (String) -> Unit) {
         thread {
             runCatching {
-                val (_, privatePem) = getOrCreateKeyPairPem(context)
-                val req = Request.Builder()
-                    .url("${cfg.serverBaseUrl}/api/gateway/pull?deviceId=${cfg.deviceId}")
-                    .get()
-                    .build()
-                client.newCall(req).execute().use { resp ->
-                    if (resp.code == 204) {
-                        flushPendingUploads(context, cfg)
-                        callback("No pending message")
-                        return@thread
-                    }
-                    if (!resp.isSuccessful) error("pull failed: ${resp.code}")
-                    val body = resp.body?.string() ?: error("empty body")
-                    val json = JSONObject(body)
-                    val encrypted = json.getString("encryptedPayloadBase64")
-                    val plain = decryptWithPrivateKey(privatePem, encrypted)
-                    val payload = JSONObject(plain)
-                    val phone = payload.getString("targetPhone")
-                    val text = payload.getString("content")
-                    val smsManager = when (val subId = cfg.simSubId) {
-                        null -> SmsManager.getDefault()
-                        SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
-                        else -> SmsManager.getSmsManagerForSubscriptionId(subId)
-                    }
-                    smsManager.sendTextMessage(phone, null, text, null, null)
-                    flushPendingUploads(context, cfg)
-                    callback("SMS sent to $phone")
-                }
+                callback(pollAndSendSync(context, cfg))
             }.onFailure {
                 callback("Poll error: ${it.message}")
             }
+        }
+    }
+
+    fun pollAndSendSync(context: Context, cfg: GatewayConfig): String {
+        val (_, privatePem) = getOrCreateKeyPairPem(context)
+        val req = Request.Builder()
+            .url("${cfg.serverBaseUrl}/api/gateway/pull?deviceId=${cfg.deviceId}")
+            .get()
+            .build()
+
+        httpClient(context, cfg).newCall(req).execute().use { resp ->
+            if (resp.code == 204) {
+                flushPendingUploads(context, cfg)
+                return "No pending message"
+            }
+            if (!resp.isSuccessful) {
+                val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: "no body"
+                error("pull failed: ${resp.code} $body")
+            }
+            val body = resp.body?.string() ?: error("empty body")
+            val json = JSONObject(body)
+            val encrypted = json.getString("encryptedPayloadBase64")
+            val plain = decryptWithPrivateKey(privatePem, encrypted)
+            val payload = JSONObject(plain)
+            val phone = payload.getString("targetPhone")
+            val text = payload.getString("content")
+            val smsManager = when (val subId = cfg.simSubId) {
+                null -> SmsManager.getDefault()
+                SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
+                else -> SmsManager.getSmsManagerForSubscriptionId(subId)
+            }
+            smsManager.sendTextMessage(phone, null, text, null, null)
+            flushPendingUploads(context, cfg)
+            return "SMS sent to $phone"
         }
     }
 
@@ -133,6 +134,7 @@ object GatewayRuntime {
         pending.forEach { item ->
             runCatching {
                 uploadInboundSmsSync(
+                    context = context,
                     cfg = cfg,
                     phone = item.phone,
                     content = item.content,
@@ -169,6 +171,7 @@ object GatewayRuntime {
                         val type = it.getInt(typeIdx)
                         val direction = if (type == Telephony.Sms.MESSAGE_TYPE_SENT) "outbound" else "inbound"
                         uploadInboundSmsSync(
+                            context = context,
                             cfg = cfg,
                             phone = phone,
                             content = content,
@@ -193,6 +196,7 @@ object GatewayRuntime {
     }
 
     private fun uploadInboundSmsSync(
+        context: Context,
         cfg: GatewayConfig,
         phone: String,
         content: String,
@@ -200,7 +204,7 @@ object GatewayRuntime {
         direction: String,
         messageId: String?
     ) {
-        val serverPublicPem = fetchServerPublicKey(cfg)
+        val serverPublicPem = fetchServerPublicKey(context, cfg)
 
         val payload = JSONObject()
             .put("phone", phone)
@@ -219,18 +223,66 @@ object GatewayRuntime {
             .url("${cfg.serverBaseUrl}/api/gateway/sms/upload")
             .post(up.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        client.newCall(req).execute().close()
+        httpClient(context, cfg).newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: "no body"
+                error("upload failed: ${resp.code} $body")
+            }
+        }
     }
 
-    private fun fetchServerPublicKey(cfg: GatewayConfig): String {
+    private fun fetchServerPublicKey(context: Context, cfg: GatewayConfig): String {
         val serverKeyReq = Request.Builder()
             .url("${cfg.serverBaseUrl}/api/crypto/server-public-key")
             .get()
             .build()
-        return client.newCall(serverKeyReq).execute().use {
+        return httpClient(context, cfg).newCall(serverKeyReq).execute().use {
+            if (!it.isSuccessful) {
+                val body = it.body?.string()?.takeIf { body -> body.isNotBlank() } ?: "no body"
+                error("server public key fetch failed: ${it.code} $body")
+            }
             val body = it.body?.string() ?: error("empty body")
             JSONObject(body).getString("publicKey")
         }
+    }
+
+    private fun httpClient(context: Context, cfg: GatewayConfig): OkHttpClient {
+        val builder = OkHttpClient.Builder()
+            .addInterceptor(Interceptor { chain ->
+                val original = chain.request()
+                val req = original.newBuilder()
+                val password = RuntimeConfig.password?.trim()
+                if (!password.isNullOrEmpty()) {
+                    req.header("X-Password", password)
+                }
+                chain.proceed(req.build())
+            })
+
+        if (cfg.serverBaseUrl.startsWith("https://", ignoreCase = true) && !GatewayCertificateStore.hasCertificate(context)) {
+            error("HTTPS requires an imported server certificate")
+        }
+
+        if (cfg.serverBaseUrl.startsWith("https://", ignoreCase = true) && GatewayCertificateStore.hasCertificate(context)) {
+            val cf = CertificateFactory.getInstance("X.509")
+            GatewayCertificateStore.openInputStream(context).use { input ->
+                if (input != null) {
+                    val ca = cf.generateCertificate(input)
+                    val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+                    keyStore.load(null, null)
+                    keyStore.setCertificateEntry("server", ca)
+
+                    val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+                    tmf.init(keyStore)
+                    val trustManager = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
+
+                    val sslContext = SSLContext.getInstance("TLS")
+                    sslContext.init(null, arrayOf(trustManager), null)
+                    builder.sslSocketFactory(sslContext.socketFactory, trustManager)
+                }
+            }
+        }
+
+        return builder.build()
     }
 
     private fun getOrCreateKeyPairPem(context: Context): Pair<String, String> {

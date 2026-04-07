@@ -2,6 +2,7 @@ package com.remotemessage.gateway
 
 import android.Manifest
 import android.content.Context
+import android.content.Intent
 import android.content.SharedPreferences
 import android.content.pm.PackageManager
 import android.os.Build
@@ -10,6 +11,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.TextView
 import androidx.activity.ComponentActivity
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import fi.iki.elonen.NanoHTTPD
@@ -18,6 +20,23 @@ class MainActivity : ComponentActivity() {
 
     private lateinit var pref: SharedPreferences
     private var webUiServer: GatewayWebUiServer? = null
+    private var statusTextView: TextView? = null
+
+    private val importCertLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        val tv = statusTextView ?: return@registerForActivityResult
+        if (uri == null) return@registerForActivityResult
+
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        runCatching {
+            GatewayCertificateStore.importFromUri(this, uri)
+            tv.text = getString(R.string.status_cert_imported)
+        }.onFailure {
+            tv.text = getString(R.string.status_cert_import_failed, it.message ?: "unknown")
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,11 +54,13 @@ class MainActivity : ComponentActivity() {
         val btnPollOnce = findViewById<Button>(R.id.btnPollOnce)
         val btnSyncHistory = findViewById<Button>(R.id.btnSyncHistory)
         val btnFlushPending = findViewById<Button>(R.id.btnFlushPending)
+        val btnImportCert = findViewById<Button>(R.id.btnImportCert)
+        statusTextView = textStatus
 
-        editServer.setText(pref.getString("server_base", "http://10.0.2.2:5000") ?: "")
+        editServer.setText(pref.getString("server_base", "https://10.0.2.2:5001") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
         editSimSubId.setText(pref.getString("sim_sub_id", "") ?: "")
-        editApiKey.setText(pref.getString("api_key", "") ?: "")
+        editApiKey.setText(pref.getString("password", pref.getString("api_key", "")) ?: "")
         editWebUiPort.setText(pref.getString("webui_port", "8088") ?: "8088")
 
         RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
@@ -77,7 +98,7 @@ class MainActivity : ComponentActivity() {
                 .putString("server_base", serverText)
                 .putString("device_id", deviceIdText)
                 .putString("sim_sub_id", editSimSubId.text.toString().trim())
-                .putString("api_key", passwordText)
+                .putString("password", passwordText)
                 .putString("webui_port", port.toString())
                 .apply()
             RuntimeConfig.password = passwordText
@@ -130,6 +151,10 @@ class MainActivity : ComponentActivity() {
                 GatewayRuntime.flushPendingUploads(this, cfg)
                 runOnUiThread { textStatus.text = getString(R.string.status_pending_flushed) }
             }.start()
+        }
+
+        btnImportCert.setOnClickListener {
+            importCertLauncher.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "*/*"))
         }
     }
 

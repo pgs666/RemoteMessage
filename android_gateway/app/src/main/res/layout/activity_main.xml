@@ -88,6 +88,13 @@
             android:layout_marginTop="8dp"
             android:text="@string/btn_flush_pending" />
 
+        <Button
+            android:id="@+id/btnImportCert"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/btn_import_cert" />
+
         <TextView
             android:id="@+id/textStatus"
             android:layout_width="match_parent"

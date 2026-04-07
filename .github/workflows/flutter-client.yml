@@ -23,10 +23,10 @@ jobs:
       - name: Create Flutter app skeleton
         run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
 
-      - name: Add desktop db dependencies
+      - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3
+          flutter pub add path path_provider sqlite3 file_selector
 
       - name: Inject client source
         run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
@@ -52,10 +52,10 @@ jobs:
       - name: Create Flutter app skeleton
         run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
 
-      - name: Add desktop db dependencies
+      - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3
+          flutter pub add path path_provider sqlite3 file_selector
 
       - name: Inject client source
         run: copy client\\flutter_client_source\\lib\\main.dart client\\flutter_client_build\\lib\\main.dart
@@ -86,10 +86,10 @@ jobs:
       - name: Create Flutter app skeleton
         run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
 
-      - name: Add desktop db dependencies
+      - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3
+          flutter pub add path path_provider sqlite3 file_selector
 
       - name: Inject client source
         run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
@@ -115,10 +115,10 @@ jobs:
       - name: Create Flutter app skeleton
         run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
 
-      - name: Add desktop db dependencies
+      - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3
+          flutter pub add path path_provider sqlite3 file_selector
 
       - name: Inject client source
         run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart

@@ -1,14 +1,22 @@
+using System.Net;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Data.Sqlite;
 
+var httpsSettings = new HttpsCertificateSettings();
 var builder = WebApplication.CreateBuilder(args);
+builder.WebHost.ConfigureKestrel(options =>
+{
+    options.ListenAnyIP(httpsSettings.HttpsPort, listen => listen.UseHttps(httpsSettings.Certificate));
+});
 builder.Services.AddSingleton<CryptoState>();
 builder.Services.AddSingleton<GatewayRegistry>();
 builder.Services.AddSingleton<SqliteRepository>();
 builder.Services.AddSingleton<PasswordSecuritySettings>();
+builder.Services.AddSingleton(httpsSettings);
 
 var app = builder.Build();
 
@@ -263,15 +271,77 @@ public sealed class PasswordSecuritySettings
     }
 }
 
+public sealed class HttpsCertificateSettings
+{
+    public X509Certificate2 Certificate { get; }
+    public string CerFilePath { get; }
+    public string PfxFilePath { get; }
+    public int HttpsPort { get; }
+
+    public HttpsCertificateSettings()
+    {
+        var baseDir = AppContext.BaseDirectory;
+        CerFilePath = Path.Combine(baseDir, "server-cert.cer");
+        PfxFilePath = Path.Combine(baseDir, "server-cert.pfx");
+        HttpsPort = int.TryParse(Environment.GetEnvironmentVariable("REMOTE_MESSAGE_HTTPS_PORT"), out var p) && p is >= 1 and <= 65535
+            ? p
+            : 5001;
+
+        Certificate = LoadOrCreateCertificate();
+    }
+
+    private X509Certificate2 LoadOrCreateCertificate()
+    {
+        if (File.Exists(PfxFilePath))
+        {
+            var existing = new X509Certificate2(PfxFilePath, string.Empty, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
+            EnsureCertificateFile(existing);
+            return existing;
+        }
+
+        using var rsa = RSA.Create(2048);
+        var req = new CertificateRequest(
+            $"CN={Dns.GetHostName()}",
+            rsa,
+            HashAlgorithmName.SHA256,
+            RSASignaturePadding.Pkcs1
+        );
+
+        req.CertificateExtensions.Add(new X509BasicConstraintsExtension(false, false, 0, false));
+        req.CertificateExtensions.Add(new X509KeyUsageExtension(X509KeyUsageFlags.DigitalSignature | X509KeyUsageFlags.KeyEncipherment, false));
+        req.CertificateExtensions.Add(new X509SubjectKeyIdentifierExtension(req.PublicKey, false));
+
+        var san = new SubjectAlternativeNameBuilder();
+        san.AddDnsName("localhost");
+        san.AddDnsName(Dns.GetHostName());
+        san.AddIpAddress(IPAddress.Loopback);
+        san.AddIpAddress(IPAddress.IPv6Loopback);
+        foreach (var ip in Dns.GetHostAddresses(Dns.GetHostName()).Where(x => x.AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork || x.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6))
+        {
+            san.AddIpAddress(ip);
+        }
+        req.CertificateExtensions.Add(san.Build());
+
+        var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
+        var exportable = new X509Certificate2(cert.Export(X509ContentType.Pfx), string.Empty, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
+        File.WriteAllBytes(PfxFilePath, exportable.Export(X509ContentType.Pfx));
+        EnsureCertificateFile(exportable);
+        return exportable;
+    }
+
+    private void EnsureCertificateFile(X509Certificate2 certificate)
+    {
+        File.WriteAllText(CerFilePath, certificate.ExportCertificatePem(), new UTF8Encoding(false));
+    }
+}
+
 public sealed class SqliteRepository
 {
     private readonly string _connectionString;
 
     public SqliteRepository()
     {
-        var baseDir = Path.Combine(AppContext.BaseDirectory, "data");
-        Directory.CreateDirectory(baseDir);
-        var dbPath = Path.Combine(baseDir, "server.db");
+        var dbPath = Path.Combine(AppContext.BaseDirectory, "server.db");
         _connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
         EnsureSchema();
     }

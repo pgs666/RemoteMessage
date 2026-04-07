@@ -1,6 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
+import 'dart:typed_data';
 
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
@@ -92,6 +94,9 @@ class _MessageHomePageState extends State<MessageHomePage> {
   }
 
   Future<void> _bootstrap() async {
+    await widget.settings.load();
+    _serverCtrl.text = widget.settings.serverBaseUrl;
+    _deviceCtrl.text = widget.settings.deviceId;
     await _db.init();
     _lastSyncTs = await _db.getMetaInt('lastSyncTs') ?? 0;
     _activePhone = await _db.getMetaString('activePhone');
@@ -245,31 +250,39 @@ class _MessageHomePageState extends State<MessageHomePage> {
   }
 
   Future<String> _getJson(Uri url, {String? password}) async {
-    final client = HttpClient();
-    final req = await client.getUrl(url);
-    if ((password ?? '').trim().isNotEmpty) {
-      req.headers.set('X-Password', password!.trim());
+    final client = await widget.settings.createHttpClient(url, isZh: _isZh);
+    try {
+      final req = await client.getUrl(url);
+      if ((password ?? '').trim().isNotEmpty) {
+        req.headers.set('X-Password', password!.trim());
+      }
+      final resp = await req.close();
+      final body = await utf8.decodeStream(resp);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw Exception('HTTP ${resp.statusCode}: $body');
+      }
+      return body;
+    } finally {
+      client.close(force: true);
     }
-    final resp = await req.close();
-    final body = await utf8.decodeStream(resp);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw Exception('HTTP ${resp.statusCode}: $body');
-    }
-    return body;
   }
 
   Future<void> _postJson(Uri url, Map<String, dynamic> data, {String? password}) async {
-    final client = HttpClient();
-    final req = await client.postUrl(url);
-    req.headers.contentType = ContentType.json;
-    if ((password ?? '').trim().isNotEmpty) {
-      req.headers.set('X-Password', password!.trim());
-    }
-    req.add(utf8.encode(jsonEncode(data)));
-    final resp = await req.close();
-    final body = await utf8.decodeStream(resp);
-    if (resp.statusCode < 200 || resp.statusCode >= 300) {
-      throw Exception('HTTP ${resp.statusCode}: $body');
+    final client = await widget.settings.createHttpClient(url, isZh: _isZh);
+    try {
+      final req = await client.postUrl(url);
+      req.headers.contentType = ContentType.json;
+      if ((password ?? '').trim().isNotEmpty) {
+        req.headers.set('X-Password', password!.trim());
+      }
+      req.add(utf8.encode(jsonEncode(data)));
+      final resp = await req.close();
+      final body = await utf8.decodeStream(resp);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw Exception('HTTP ${resp.statusCode}: $body');
+      }
+    } finally {
+      client.close(force: true);
     }
   }
 
@@ -496,6 +509,8 @@ class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _deviceCtrl;
   late final TextEditingController _passwordCtrl;
   late ThemeMode _themeMode;
+  String _certStatus = '';
+  bool _certBusy = false;
 
   bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
@@ -507,6 +522,54 @@ class _SettingsPageState extends State<SettingsPage> {
     _deviceCtrl = TextEditingController(text: widget.settings.deviceId);
     _passwordCtrl = TextEditingController(text: widget.settings.password);
     _themeMode = widget.settings.themeMode;
+    _reloadCertStatus();
+  }
+
+  Future<void> _reloadCertStatus() async {
+    final file = await widget.settings.trustedCertificateFile();
+    final exists = await file.exists();
+    if (!mounted) return;
+    setState(() {
+      _certStatus = exists
+          ? tr('已导入服务器证书，HTTPS 将仅信任该证书', 'Server certificate imported. HTTPS will trust only this certificate.')
+          : tr('未导入服务器证书；使用 HTTPS 前请先导入 server-cert.cer', 'No server certificate imported. Import server-cert.cer before using HTTPS.');
+    });
+  }
+
+  Future<void> _importServerCertificate() async {
+    setState(() => _certBusy = true);
+    try {
+      final file = await openFile(
+        acceptedTypeGroups: [
+          XTypeGroup(
+            label: 'certificate',
+            extensions: ['cer', 'crt', 'pem', 'der'],
+            mimeTypes: ['application/x-x509-ca-cert', 'application/pkix-cert', 'application/octet-stream', 'text/plain'],
+            uniformTypeIdentifiers: ['public.x509-certificate', 'public.data'],
+          ),
+        ],
+        confirmButtonText: tr('导入', 'Import'),
+      );
+      if (file == null) return;
+
+      final bytes = await file.readAsBytes();
+      await widget.settings.importTrustedCertificate(bytes);
+      await _reloadCertStatus();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${tr('证书已导入：', 'Certificate imported: ')}${file.name}')),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _certStatus = '${tr('证书导入失败', 'Certificate import failed')}: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('${tr('证书导入失败', 'Certificate import failed')}: $e')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _certBusy = false);
+      }
+    }
   }
 
   @override
@@ -542,6 +605,22 @@ class _SettingsPageState extends State<SettingsPage> {
                 DropdownMenuItem(value: ThemeMode.dark, child: Text(tr('深色', 'Dark'))),
               ],
               onChanged: (v) => setState(() => _themeMode = v ?? ThemeMode.system),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _certBusy ? null : _importServerCertificate,
+              icon: _certBusy
+                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.file_open),
+              label: Text(tr('导入服务器证书', 'Import Server Certificate')),
+            ),
+            const SizedBox(height: 8),
+            Align(
+              alignment: Alignment.centerLeft,
+              child: Text(
+                _certStatus,
+                style: Theme.of(context).textTheme.bodyMedium,
+              ),
             ),
             const Spacer(),
             FilledButton.icon(
@@ -581,7 +660,7 @@ class SettingsResult {
 }
 
 class AppSettingsStore {
-  String serverBaseUrl = 'http://127.0.0.1:5000';
+  String serverBaseUrl = 'https://127.0.0.1:5001';
   String deviceId = 'android-arm64-gateway';
   String password = '';
   ThemeMode themeMode = ThemeMode.system;
@@ -634,6 +713,56 @@ class AppSettingsStore {
     await file.parent.create(recursive: true);
     _db = sqlite.sqlite3.open(file.path);
     return _db!;
+  }
+
+  Future<File> trustedCertificateFile() async {
+    final base = await _appPrivateBaseDir();
+    return File(p.join(base, 'trusted_server_cert.cer'));
+  }
+
+  Future<void> importTrustedCertificate(Uint8List bytes) async {
+    final normalized = _normalizeCertificateBytes(bytes);
+    final context = SecurityContext(withTrustedRoots: false);
+    context.setTrustedCertificatesBytes(normalized);
+    final file = await trustedCertificateFile();
+    await file.parent.create(recursive: true);
+    await file.writeAsBytes(normalized, flush: true);
+  }
+
+  Future<HttpClient> createHttpClient(Uri url, {required bool isZh}) async {
+    if (!url.scheme.toLowerCase().startsWith('https')) {
+      return HttpClient();
+    }
+
+    final file = await trustedCertificateFile();
+    if (!await file.exists()) {
+      throw Exception(
+        isZh
+            ? '当前为 HTTPS 连接，请先在设置中导入 server-cert.cer'
+            : 'HTTPS is enabled. Please import server-cert.cer in Settings first.',
+      );
+    }
+
+    final bytes = await file.readAsBytes();
+    final context = SecurityContext(withTrustedRoots: false);
+    context.setTrustedCertificatesBytes(bytes);
+    return HttpClient(context: context);
+  }
+
+  Uint8List _normalizeCertificateBytes(Uint8List bytes) {
+    final text = utf8.decode(bytes, allowMalformed: true);
+    if (text.contains('-----BEGIN CERTIFICATE-----')) {
+      return Uint8List.fromList(utf8.encode(text));
+    }
+
+    final b64 = base64Encode(bytes);
+    final buffer = StringBuffer('-----BEGIN CERTIFICATE-----\n');
+    for (var i = 0; i < b64.length; i += 64) {
+      final end = (i + 64 < b64.length) ? i + 64 : b64.length;
+      buffer.writeln(b64.substring(i, end));
+    }
+    buffer.write('-----END CERTIFICATE-----\n');
+    return Uint8List.fromList(utf8.encode(buffer.toString()));
   }
 
   ThemeMode _parseThemeMode(String text) {
