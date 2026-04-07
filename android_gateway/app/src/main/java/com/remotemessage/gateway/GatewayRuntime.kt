@@ -1,6 +1,7 @@
 package com.remotemessage.gateway
 
 import android.content.Context
+import java.io.ByteArrayOutputStream
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.provider.Telephony
@@ -19,6 +20,7 @@ import java.security.MessageDigest
 import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.Security
+import java.security.interfaces.RSAKey
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.security.cert.CertificateFactory
@@ -380,9 +382,20 @@ object GatewayRuntime {
 
     private fun encryptByPublicKey(publicPem: String, plain: String): String {
         val key = loadPublicKey(publicPem)
-        val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
-        cipher.init(Cipher.ENCRYPT_MODE, key)
-        return Base64.getEncoder().encodeToString(cipher.doFinal(plain.toByteArray(Charsets.UTF_8)))
+        val plainBytes = plain.toByteArray(Charsets.UTF_8)
+        val maxChunkSize = maxOaepSha256PlaintextSize(key)
+        if (plainBytes.size <= maxChunkSize) {
+            return encryptChunk(key, plainBytes)
+        }
+
+        val chunks = ArrayList<String>()
+        var offset = 0
+        while (offset < plainBytes.size) {
+            val end = minOf(offset + maxChunkSize, plainBytes.size)
+            chunks += encryptChunk(key, plainBytes.copyOfRange(offset, end))
+            offset = end
+        }
+        return chunks.joinToString(".")
     }
 
     private fun decryptWithPrivateKey(privatePem: String, encryptedBase64: String): String {
@@ -391,10 +404,36 @@ object GatewayRuntime {
         } else {
             loadPrivateKey(privatePem)
         }
+        if (!encryptedBase64.contains('.')) {
+            return decryptChunk(key, encryptedBase64).toString(Charsets.UTF_8)
+        }
+
+        val output = ByteArrayOutputStream()
+        encryptedBase64
+            .split('.')
+            .filter { it.isNotBlank() }
+            .forEach { chunk ->
+                output.write(decryptChunk(key, chunk))
+            }
+        return output.toByteArray().toString(Charsets.UTF_8)
+    }
+
+    private fun encryptChunk(key: PublicKey, plainBytes: ByteArray): String {
+        val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
+        cipher.init(Cipher.ENCRYPT_MODE, key)
+        return Base64.getEncoder().encodeToString(cipher.doFinal(plainBytes))
+    }
+
+    private fun decryptChunk(key: PrivateKey, encryptedBase64: String): ByteArray {
         val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
         cipher.init(Cipher.DECRYPT_MODE, key)
-        val plain = cipher.doFinal(Base64.getDecoder().decode(encryptedBase64))
-        return plain.toString(Charsets.UTF_8)
+        return cipher.doFinal(Base64.getDecoder().decode(encryptedBase64))
+    }
+
+    private fun maxOaepSha256PlaintextSize(key: PublicKey): Int {
+        val keyBytes = ((key as? RSAKey)?.modulus?.bitLength()?.plus(7)?.div(8)) ?: 256
+        val hashBytes = 32
+        return keyBytes - (2 * hashBytes) - 2
     }
 
     private fun loadPrivateKeyFromAndroidKeystore(alias: String): PrivateKey {

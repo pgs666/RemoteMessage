@@ -4,6 +4,7 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Linq;
 using Microsoft.Data.Sqlite;
 
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
@@ -176,8 +177,30 @@ static string EncryptByPublicKey(string plainText, string publicPem)
     using var rsa = RSA.Create();
     rsa.ImportFromPem(publicPem);
     var bytes = Encoding.UTF8.GetBytes(plainText);
-    var encrypted = rsa.Encrypt(bytes, RSAEncryptionPadding.OaepSHA256);
-    return Convert.ToBase64String(encrypted);
+    var maxChunkSize = GetMaxOaepSha256PlaintextSize(rsa);
+    if (bytes.Length <= maxChunkSize)
+    {
+        var encrypted = rsa.Encrypt(bytes, RSAEncryptionPadding.OaepSHA256);
+        return Convert.ToBase64String(encrypted);
+    }
+
+    var chunks = new List<string>();
+    for (var offset = 0; offset < bytes.Length; offset += maxChunkSize)
+    {
+        var len = Math.Min(maxChunkSize, bytes.Length - offset);
+        var slice = bytes.AsSpan(offset, len).ToArray();
+        var encrypted = rsa.Encrypt(slice, RSAEncryptionPadding.OaepSHA256);
+        chunks.Add(Convert.ToBase64String(encrypted));
+    }
+
+    return string.Join('.', chunks);
+}
+
+static int GetMaxOaepSha256PlaintextSize(RSA rsa)
+{
+    var keyBytes = rsa.KeySize / 8;
+    var hashBytes = 32;
+    return keyBytes - (2 * hashBytes) - 2;
 }
 
 public static class MessageIdentity
@@ -203,9 +226,21 @@ public sealed class CryptoState
 
     public string DecryptWithServerPrivateKey(string encryptedBase64)
     {
-        var data = Convert.FromBase64String(encryptedBase64);
-        var plain = _serverRsa.Decrypt(data, RSAEncryptionPadding.OaepSHA256);
-        return Encoding.UTF8.GetString(plain);
+        if (!encryptedBase64.Contains('.'))
+        {
+            var data = Convert.FromBase64String(encryptedBase64);
+            var plain = _serverRsa.Decrypt(data, RSAEncryptionPadding.OaepSHA256);
+            return Encoding.UTF8.GetString(plain);
+        }
+
+        using var output = new MemoryStream();
+        foreach (var chunk in encryptedBase64.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+        {
+            var data = Convert.FromBase64String(chunk);
+            var plainChunk = _serverRsa.Decrypt(data, RSAEncryptionPadding.OaepSHA256);
+            output.Write(plainChunk, 0, plainChunk.Length);
+        }
+        return Encoding.UTF8.GetString(output.ToArray());
     }
 }
 
