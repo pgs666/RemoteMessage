@@ -29,6 +29,7 @@ object GatewayDebugLog {
             val existing = current(appContext)
                 .lineSequence()
                 .filter { it.isNotBlank() }
+                .toList()
                 .takeLast(MAX_LINES - 1)
                 .toMutableList()
             existing += "[$timestamp] $message"
