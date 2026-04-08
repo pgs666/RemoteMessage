@@ -16,6 +16,7 @@
     <string name="btn_flush_pending">Flush Pending Uploads</string>
     <string name="btn_import_cert">Import Server Certificate</string>
     <string name="btn_request_sms_role">Request Default SMS Role</string>
+    <string name="btn_clear_log">Clear Gateway Log</string>
     <string name="status_ready">Ready</string>
     <string name="status_saved_auto_sync">Saved + Auto Sync scheduled</string>
     <string name="status_pending_flushed">Pending uploads flushed</string>
@@ -34,4 +35,6 @@
     <string name="status_history_sync_progress">History sync progress: %1$d/%2$d</string>
     <string name="status_sim_info_empty">SIM info not loaded yet</string>
     <string name="status_sim_info_refreshed">SIM info refreshed</string>
+    <string name="status_debug_log_empty">Gateway log is empty</string>
+    <string name="status_debug_log_cleared">Gateway log cleared</string>
 </resources>

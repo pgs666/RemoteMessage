@@ -93,6 +93,7 @@ object GatewayRuntime {
     fun registerGateway(context: Context, cfg: GatewayConfig, callback: (String) -> Unit) {
         thread {
             runCatching {
+                GatewayDebugLog.add(context, "Register gateway: ${cfg.deviceId} -> ${cfg.serverBaseUrl}")
                 val (pubPem, _) = getOrCreateKeyPairPem(context)
                 val bodyJson = JSONObject()
                     .put("deviceId", cfg.deviceId)
@@ -106,8 +107,10 @@ object GatewayRuntime {
                 }
                 runCatching { pushSimStateSync(context, cfg) }
             }.onSuccess {
+                GatewayDebugLog.add(context, "Register gateway success")
                 callback("Gateway registered")
             }.onFailure {
+                GatewayDebugLog.add(context, "Register gateway failed: ${it.message}")
                 callback("Register error: ${it.message}")
             }
         }
@@ -124,6 +127,7 @@ object GatewayRuntime {
     }
 
     fun pollAndSendSync(context: Context, cfg: GatewayConfig): String {
+        GatewayDebugLog.add(context, "Poll start: ${cfg.deviceId}")
         val (_, privatePem) = getOrCreateKeyPairPem(context)
         val req = Request.Builder()
             .url("${cfg.serverBaseUrl}/api/gateway/pull?deviceId=${cfg.deviceId}")
@@ -132,11 +136,13 @@ object GatewayRuntime {
 
         httpClient(context, cfg).newCall(req).execute().use { resp ->
             if (resp.code == 204) {
+                GatewayDebugLog.add(context, "Poll result: no pending message")
                 flushPendingUploads(context, cfg)
                 return "No pending message"
             }
             if (!resp.isSuccessful) {
                 val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: "no body"
+                GatewayDebugLog.add(context, "Poll failed: ${resp.code} $body")
                 error("pull failed: ${resp.code} $body")
             }
             val body = resp.body?.string() ?: error("empty body")
@@ -147,11 +153,14 @@ object GatewayRuntime {
             val phone = payload.getString("targetPhone")
             val text = payload.getString("content")
             val preferredSimSlotIndex = payload.optNullableInt("simSlotIndex")
+            GatewayDebugLog.add(context, "Poll got outbound request: phone=$phone, chars=${text.length}, requestedSlot=${preferredSimSlotIndex ?: -1}")
             val resolvedSim = GatewaySimSupport.resolveForSlotIndex(
                 snapshot = GatewaySimSupport.readSnapshot(context),
                 slotIndex = preferredSimSlotIndex
             )
+            GatewayDebugLog.add(context, "Resolved send SIM: slot=${resolvedSim.slotIndex ?: -1}, subId=${resolvedSim.subscriptionId ?: -1}, simPhone=${resolvedSim.simPhoneNumber ?: ""}")
             sendTextMessageCompat(smsManagerForSubscriptionId(resolvedSim.subscriptionId), phone, text)
+            GatewayDebugLog.add(context, "SMS dispatch invoked for $phone")
             flushPendingUploads(context, cfg)
             return "SMS sent to $phone"
         }
@@ -190,6 +199,8 @@ object GatewayRuntime {
                 val pending = local.listPending(200)
                 if (pending.isEmpty()) return
 
+                GatewayDebugLog.add(context, "Flush pending uploads: ${pending.size} item(s)")
+
                 val uploadedIds = ArrayList<Long>(pending.size)
                 pending.forEach { item ->
                     runCatching {
@@ -207,6 +218,7 @@ object GatewayRuntime {
                             serverPublicPem = serverPublicPem
                         )
                         uploadedIds += item.id
+                        GatewayDebugLog.add(context, "Uploaded sms: id=${item.messageId ?: item.id}, slot=${item.simSlotIndex ?: -1}, phone=${item.phone}")
                     }
                 }
                 local.deletePending(uploadedIds)
@@ -354,6 +366,7 @@ object GatewayRuntime {
 
     fun pushSimStateSync(context: Context, cfg: GatewayConfig): String {
         val snapshot = GatewaySimSupport.readSnapshot(context)
+        GatewayDebugLog.add(context, "Push SIM state: count=${snapshot.profiles.size}")
         val profiles = JSONArray()
         snapshot.profiles.sortedBy { it.slotIndex }.forEach { profile ->
             profiles.put(
@@ -378,9 +391,11 @@ object GatewayRuntime {
         httpClient(context, cfg).newCall(req).execute().use {
             if (!it.isSuccessful) {
                 val body = it.body?.string()?.takeIf { body -> body.isNotBlank() } ?: "no body"
+                GatewayDebugLog.add(context, "Push SIM state failed: ${it.code} $body")
                 error("sim-state failed: ${it.code} $body")
             }
         }
+        GatewayDebugLog.add(context, "Push SIM state success")
         return "SIM state uploaded: ${snapshot.profiles.size}"
     }
 

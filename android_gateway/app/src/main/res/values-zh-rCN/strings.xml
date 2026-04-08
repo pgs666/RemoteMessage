@@ -16,6 +16,7 @@
     <string name="btn_flush_pending">补传待发送队列</string>
     <string name="btn_import_cert">导入服务器证书</string>
     <string name="btn_request_sms_role">申请默认短信应用</string>
+    <string name="btn_clear_log">清空网关日志</string>
     <string name="status_ready">就绪</string>
     <string name="status_saved_auto_sync">已保存并启用自动同步</string>
     <string name="status_pending_flushed">待上传队列已补传</string>
@@ -34,4 +35,6 @@
     <string name="status_history_sync_progress">历史短信同步进度：%1$d/%2$d</string>
     <string name="status_sim_info_empty">尚未加载 SIM 信息</string>
     <string name="status_sim_info_refreshed">SIM 信息已刷新</string>
+    <string name="status_debug_log_empty">网关日志为空</string>
+    <string name="status_debug_log_cleared">网关日志已清空</string>
 </resources>

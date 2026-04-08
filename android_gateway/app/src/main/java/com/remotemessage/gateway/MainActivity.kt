@@ -28,6 +28,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var pref: SharedPreferences
     private var webUiServer: GatewayWebUiServer? = null
     private var statusTextView: TextView? = null
+    private var debugLogTextView: TextView? = null
     private var syncProgressBar: ProgressBar? = null
     private val realtimeSyncHandler = Handler(Looper.getMainLooper())
     private var realtimeSyncRunnable: Runnable? = null
@@ -44,6 +45,12 @@ class MainActivity : ComponentActivity() {
 
     @Volatile
     private var realtimeSyncBusy = false
+
+    private val debugLogListener: (String) -> Unit = { text ->
+        runOnUiThread {
+            debugLogTextView?.text = if (text.isBlank()) getString(R.string.status_debug_log_empty) else text
+        }
+    }
 
     private val importCertLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val tv = statusTextView ?: return@registerForActivityResult
@@ -74,6 +81,7 @@ class MainActivity : ComponentActivity() {
         val editWebUiPort = findViewById<EditText>(R.id.editWebUiPort)
         val textStatus = findViewById<TextView>(R.id.textStatus)
         val textSimInfo = findViewById<TextView>(R.id.textSimInfo)
+        val textDebugLog = findViewById<TextView>(R.id.textDebugLog)
         val progressSync = findViewById<ProgressBar>(R.id.progressSync)
         val btnSave = findViewById<Button>(R.id.btnSave)
         val btnRegister = findViewById<Button>(R.id.btnRegister)
@@ -83,7 +91,9 @@ class MainActivity : ComponentActivity() {
         val btnFlushPending = findViewById<Button>(R.id.btnFlushPending)
         val btnImportCert = findViewById<Button>(R.id.btnImportCert)
         val btnRequestSmsRole = findViewById<Button>(R.id.btnRequestSmsRole)
+        val btnClearLog = findViewById<Button>(R.id.btnClearLog)
         statusTextView = textStatus
+        debugLogTextView = textDebugLog
         syncProgressBar = progressSync
 
         editServer.setText(pref.getString("server_base", "https://10.0.2.2:5001") ?: "")
@@ -93,6 +103,8 @@ class MainActivity : ComponentActivity() {
         editApiKey.setText(pref.getString("password", pref.getString("api_key", "")) ?: "")
         editWebUiPort.setText(pref.getString("webui_port", "8088") ?: "8088")
         textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
+        textDebugLog.text = GatewayDebugLog.current(this).ifBlank { getString(R.string.status_debug_log_empty) }
+        GatewayDebugLog.register(debugLogListener)
 
         RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
 
@@ -249,6 +261,11 @@ class MainActivity : ComponentActivity() {
                     getString(R.string.status_sms_role_unavailable)
                 }
             }
+        }
+
+        btnClearLog.setOnClickListener {
+            GatewayDebugLog.clear(this)
+            textStatus.text = getString(R.string.status_debug_log_cleared)
         }
     }
 
@@ -447,6 +464,7 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        GatewayDebugLog.unregister(debugLogListener)
         stopProgressPulse()
         stopRealtimeSyncLoop()
         webUiServer?.stop()
