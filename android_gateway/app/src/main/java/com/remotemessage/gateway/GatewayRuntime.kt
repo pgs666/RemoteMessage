@@ -12,6 +12,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import org.json.JSONArray
 import org.json.JSONObject
 import java.security.KeyStore
 import java.security.KeyFactory
@@ -104,6 +105,7 @@ object GatewayRuntime {
                 httpClient(context, cfg).newCall(req).execute().use {
                     if (!it.isSuccessful) error("register failed: ${it.code}")
                 }
+                runCatching { pushSimStateSync(context, cfg) }
             }.onSuccess {
                 callback("Gateway registered")
             }.onFailure {
@@ -145,11 +147,13 @@ object GatewayRuntime {
             val payload = JSONObject(plain)
             val phone = payload.getString("targetPhone")
             val text = payload.getString("content")
-            val smsManager = when (val subId = cfg.simSubId) {
-                null -> SmsManager.getDefault()
-                SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
-                else -> SmsManager.getSmsManagerForSubscriptionId(subId)
-            }
+            val preferredSimSlotIndex = payload.optNullableInt("simSlotIndex")
+            val resolvedSim = GatewaySimSupport.resolveForSlotIndex(
+                snapshot = GatewaySimSupport.readSnapshot(context),
+                slotIndex = preferredSimSlotIndex,
+                fallbackSubId = cfg.simSubId
+            )
+            val smsManager = smsManagerForSubscriptionId(resolvedSim.subscriptionId ?: cfg.simSubId)
             smsManager.sendTextMessage(phone, null, text, null, null)
             flushPendingUploads(context, cfg)
             return "SMS sent to $phone"
@@ -163,9 +167,12 @@ object GatewayRuntime {
         content: String,
         timestamp: Long,
         direction: String = "inbound",
-        messageId: String? = null
+        messageId: String? = null,
+        simSlotIndex: Int? = null,
+        simPhoneNumber: String? = null,
+        simCount: Int? = null
     ) {
-        getDb(context).enqueueUpload(phone, content, timestamp, direction, messageId)
+        getDb(context).enqueueUpload(phone, content, timestamp, direction, messageId, simSlotIndex, simPhoneNumber, simCount)
         thread {
             runCatching {
                 flushPendingUploads(context, cfg)
@@ -197,6 +204,9 @@ object GatewayRuntime {
                             timestamp = item.timestamp,
                             direction = item.direction,
                             messageId = item.messageId,
+                            simSlotIndex = item.simSlotIndex,
+                            simPhoneNumber = item.simPhoneNumber,
+                            simCount = item.simCount,
                             serverPublicPem = serverPublicPem
                         )
                         uploadedIds += item.id
@@ -223,12 +233,18 @@ object GatewayRuntime {
         thread {
             runCatching {
                 val uri = Telephony.Sms.CONTENT_URI
-                val projection = arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE)
+                val baseProjection = arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE)
+                val extendedProjection = arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE, "sub_id", "subscription_id")
                 val prefs = context.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
                 val lastHistorySyncTs = prefs.getLong(HISTORY_LAST_SYNC_TS_KEY, 0L)
                 val selection = if (lastHistorySyncTs > 0L) "${Telephony.Sms.DATE} > ?" else null
                 val selectionArgs = if (lastHistorySyncTs > 0L) arrayOf(lastHistorySyncTs.toString()) else null
-                val cursor = context.contentResolver.query(uri, projection, selection, selectionArgs, "${Telephony.Sms.DATE} ASC")
+                val simSnapshot = GatewaySimSupport.readSnapshot(context)
+                val cursor = runCatching {
+                    context.contentResolver.query(uri, extendedProjection, selection, selectionArgs, "${Telephony.Sms.DATE} ASC")
+                }.getOrElse {
+                    context.contentResolver.query(uri, baseProjection, selection, selectionArgs, "${Telephony.Sms.DATE} ASC")
+                }
                     ?: error("query sms failed")
 
                 val total = cursor.count
@@ -249,6 +265,8 @@ object GatewayRuntime {
                     val bodyIdx = it.getColumnIndexOrThrow(Telephony.Sms.BODY)
                     val dateIdx = it.getColumnIndexOrThrow(Telephony.Sms.DATE)
                     val typeIdx = it.getColumnIndexOrThrow(Telephony.Sms.TYPE)
+                    val subIdIdx = it.getColumnIndex("sub_id")
+                    val subscriptionIdIdx = it.getColumnIndex("subscription_id")
 
                     while (it.moveToNext()) {
                         val smsId = it.getString(idIdx) ?: continue
@@ -256,13 +274,22 @@ object GatewayRuntime {
                         val content = it.getString(bodyIdx) ?: ""
                         val timestamp = it.getLong(dateIdx)
                         val type = it.getInt(typeIdx)
+                        val subscriptionId = when {
+                            subIdIdx >= 0 && !it.isNull(subIdIdx) -> it.getInt(subIdIdx)
+                            subscriptionIdIdx >= 0 && !it.isNull(subscriptionIdIdx) -> it.getInt(subscriptionIdIdx)
+                            else -> null
+                        }
+                        val simInfo = GatewaySimSupport.resolveForSubscriptionId(simSnapshot, subscriptionId, cfg.simSubId)
                         val direction = if (type == Telephony.Sms.MESSAGE_TYPE_SENT) "outbound" else "inbound"
                         batch += PendingUploadInput(
                             phone = phone,
                             content = content,
                             timestamp = timestamp,
                             direction = direction,
-                            messageId = "sms-$smsId"
+                            messageId = "sms-$smsId",
+                            simSlotIndex = simInfo.slotIndex,
+                            simPhoneNumber = simInfo.simPhoneNumber,
+                            simCount = simInfo.simCount.takeIf { simCount -> simCount > 0 }
                         )
 
                         if (batch.size >= 200) {
@@ -318,6 +345,48 @@ object GatewayRuntime {
         }
     }
 
+    fun pushSimState(context: Context, cfg: GatewayConfig, callback: (String) -> Unit) {
+        thread {
+            runCatching {
+                callback(pushSimStateSync(context, cfg))
+            }.onFailure {
+                callback("SIM state sync error: ${it.message}")
+            }
+        }
+    }
+
+    fun pushSimStateSync(context: Context, cfg: GatewayConfig): String {
+        val snapshot = GatewaySimSupport.readSnapshot(context)
+        val profiles = JSONArray()
+        snapshot.profiles.sortedBy { it.slotIndex }.forEach { profile ->
+            profiles.put(
+                JSONObject()
+                    .put("slotIndex", profile.slotIndex)
+                    .put("subscriptionId", profile.subscriptionId)
+                    .put("displayName", profile.displayName)
+                    .put("phoneNumber", profile.effectivePhoneNumber)
+                    .put("simCount", snapshot.simCount)
+            )
+        }
+
+        val bodyJson = JSONObject()
+            .put("deviceId", cfg.deviceId)
+            .put("profiles", profiles)
+
+        val req = Request.Builder()
+            .url("${cfg.serverBaseUrl}/api/gateway/sim-state")
+            .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        httpClient(context, cfg).newCall(req).execute().use {
+            if (!it.isSuccessful) {
+                val body = it.body?.string()?.takeIf { body -> body.isNotBlank() } ?: "no body"
+                error("sim-state failed: ${it.code} $body")
+            }
+        }
+        return "SIM state uploaded: ${snapshot.profiles.size}"
+    }
+
     private fun readLocalSmsStats(context: Context): LocalSmsStats {
         val uri = Telephony.Sms.CONTENT_URI
         val projection = arrayOf(Telephony.Sms.DATE, Telephony.Sms.TYPE)
@@ -356,8 +425,8 @@ object GatewayRuntime {
         )
     }
 
-    fun buildMessageId(deviceId: String, phone: String, content: String, timestamp: Long, direction: String): String {
-        val raw = "$deviceId|$phone|$timestamp|$direction|$content"
+    fun buildMessageId(deviceId: String, phone: String, content: String, timestamp: Long, direction: String, simSlotIndex: Int? = null): String {
+        val raw = "$deviceId|$phone|$timestamp|$direction|${simSlotIndex ?: -1}|$content"
         val hash = MessageDigest.getInstance("SHA-256").digest(raw.toByteArray(Charsets.UTF_8))
         return hash.take(12).joinToString("") { "%02x".format(it) }
     }
@@ -370,6 +439,9 @@ object GatewayRuntime {
         timestamp: Long,
         direction: String,
         messageId: String?,
+        simSlotIndex: Int? = null,
+        simPhoneNumber: String? = null,
+        simCount: Int? = null,
         serverPublicPem: String? = null
     ) {
         val resolvedServerPublicPem = serverPublicPem ?: fetchServerPublicKey(context, cfg)
@@ -381,6 +453,15 @@ object GatewayRuntime {
             .put("direction", direction)
         if (!messageId.isNullOrBlank()) {
             payload.put("messageId", messageId)
+        }
+        if (simSlotIndex != null) {
+            payload.put("simSlotIndex", simSlotIndex)
+        }
+        if (!simPhoneNumber.isNullOrBlank()) {
+            payload.put("simPhoneNumber", simPhoneNumber)
+        }
+        if (simCount != null) {
+            payload.put("simCount", simCount)
         }
         val encrypted = encryptByPublicKey(resolvedServerPublicPem, payload.toString())
         val up = JSONObject()
@@ -425,6 +506,14 @@ object GatewayRuntime {
                 cachedServerBaseUrl = cfg.serverBaseUrl
                 cachedServerPublicPemAt = now
             }
+        }
+    }
+
+    private fun smsManagerForSubscriptionId(subscriptionId: Int?): SmsManager {
+        return when (subscriptionId) {
+            null -> SmsManager.getDefault()
+            SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
+            else -> SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
         }
     }
 
@@ -633,6 +722,10 @@ object GatewayRuntime {
             .replace("\r", "")
             .replace("\n", "")
             .trim()
+    }
+
+    private fun JSONObject.optNullableInt(name: String): Int? {
+        return if (has(name) && !isNull(name)) getInt(name) else null
     }
 
     private fun wrapPkcs1PublicKey(pkcs1: ByteArray): ByteArray {

@@ -37,7 +37,8 @@ class RespondViaMessageService : Service() {
 
         val prefs = getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
         val simSubId = prefs.getString("sim_sub_id", "")?.toIntOrNull()
-        val smsManager = when (val subId = simSubId) {
+        val resolvedSim = GatewaySimSupport.resolveForIntent(this, intent, simSubId)
+        val smsManager = when (val subId = resolvedSim.subscriptionId ?: simSubId) {
             null -> SmsManager.getDefault()
             SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
             else -> SmsManager.getSmsManagerForSubscriptionId(subId)

@@ -91,6 +91,17 @@ app.MapPost("/api/gateway/register", (RegisterGatewayRequest req, GatewayRegistr
     return Results.Ok(new { ok = true, req.DeviceId });
 });
 
+app.MapPost("/api/gateway/sim-state", (UpsertGatewaySimStateRequest req, SqliteRepository repo) =>
+{
+    if (ValidateGatewaySimStateRequest(req) is { } error)
+    {
+        return error;
+    }
+
+    repo.ReplaceGatewaySimProfiles(req.DeviceId, req.Profiles);
+    return Results.Ok(new { ok = true, count = req.Profiles.Count });
+});
+
 app.MapPost("/api/gateway/sms/upload", (UploadSmsRequest req, CryptoState crypto, SqliteRepository repo, ILogger<Program> logger) =>
 {
     if (ValidateUploadSmsRequest(req) is { } error)
@@ -113,15 +124,24 @@ app.MapPost("/api/gateway/sms/upload", (UploadSmsRequest req, CryptoState crypto
             return payloadError;
         }
 
+        var normalizedDirection = NormalizeDirection(payload.Direction);
+        var normalizedSimSlot = NormalizeSimSlotIndex(payload.SimSlotIndex);
+        var normalizedSimPhone = NormalizeOptionalText(payload.SimPhoneNumber, 64);
+        var normalizedSimCount = NormalizeSimCount(payload.SimCount);
+        var uploadedSimProfile = repo.ResolveGatewaySimProfile(req.DeviceId, normalizedSimSlot);
+
         var normalized = new SmsPayload(
             Id: string.IsNullOrWhiteSpace(payload.MessageId)
-                ? MessageIdentity.Build(req.DeviceId, payload.Phone, payload.Content, payload.Timestamp, NormalizeDirection(payload.Direction))
+                ? MessageIdentity.Build(req.DeviceId, payload.Phone, payload.Content, payload.Timestamp, normalizedDirection, normalizedSimSlot)
                 : payload.MessageId!,
             DeviceId: req.DeviceId,
             Phone: payload.Phone,
             Content: payload.Content,
             Timestamp: payload.Timestamp,
-            Direction: NormalizeDirection(payload.Direction)
+            Direction: normalizedDirection,
+            SimSlotIndex: normalizedSimSlot ?? uploadedSimProfile?.SlotIndex,
+            SimPhoneNumber: normalizedSimPhone ?? uploadedSimProfile?.PhoneNumber,
+            SimCount: normalizedSimCount ?? uploadedSimProfile?.SimCount
         );
 
         var isNew = repo.InsertMessageIfNotExists(normalized);
@@ -143,6 +163,16 @@ app.MapGet("/api/client/inbox", (long? sinceTs, int? limit, string? phone, Sqlit
 
     var list = repo.QueryMessages(sinceTs, limit ?? 5000, phone);
     return Results.Ok(list);
+});
+
+app.MapGet("/api/client/device-sims", (string deviceId, SqliteRepository repo) =>
+{
+    if (string.IsNullOrWhiteSpace(deviceId) || deviceId.Length > 128)
+    {
+        return Results.BadRequest("deviceId required");
+    }
+
+    return Results.Ok(repo.GetGatewaySimProfiles(deviceId));
 });
 
 app.MapPost("/api/client/conversations/pin", (PinConversationRequest req, SqliteRepository repo) =>
@@ -179,17 +209,37 @@ app.MapPost("/api/client/send", (SendSmsRequest req, GatewayRegistry registry, S
         registry.Upsert(req.DeviceId, pem);
     }
 
-    var instruction = new OutboundInstruction(req.TargetPhone, req.Content);
-    var plain = JsonSerializer.Serialize(instruction);
+    var gatewaySims = repo.GetGatewaySimProfiles(req.DeviceId);
+    GatewaySimProfileRecord? selectedSim = null;
+    if (req.SimSlotIndex.HasValue)
+    {
+        selectedSim = gatewaySims.FirstOrDefault(x => x.SlotIndex == req.SimSlotIndex.Value);
+        if (gatewaySims.Count > 0 && selectedSim is null)
+        {
+            return Results.BadRequest("simSlotIndex invalid");
+        }
+    }
+    else if (gatewaySims.Count == 1)
+    {
+        selectedSim = gatewaySims[0];
+    }
+
+    var outboundSimSlot = selectedSim?.SlotIndex ?? NormalizeSimSlotIndex(req.SimSlotIndex);
+    var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+    var instruction = new OutboundInstruction(req.TargetPhone, req.Content, outboundSimSlot);
+    var plain = JsonSerializer.Serialize(instruction, jsonOptions);
     var encrypted = EncryptByPublicKey(plain, pem);
 
     var outbound = new SmsPayload(
-        Id: MessageIdentity.Build(req.DeviceId, req.TargetPhone, req.Content, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(), "outbound"),
+        Id: MessageIdentity.Build(req.DeviceId, req.TargetPhone, req.Content, now, "outbound", outboundSimSlot),
         DeviceId: req.DeviceId,
         Phone: req.TargetPhone,
         Content: req.Content,
-        Timestamp: DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-        Direction: "outbound"
+        Timestamp: now,
+        Direction: "outbound",
+        SimSlotIndex: outboundSimSlot,
+        SimPhoneNumber: selectedSim?.PhoneNumber,
+        SimCount: selectedSim?.SimCount ?? gatewaySims.Select(x => (int?)x.SimCount).DefaultIfEmpty().Max()
     );
 
     repo.EnqueueOutbound(req.DeviceId, encrypted);
@@ -215,6 +265,27 @@ static string NormalizeDirection(string? direction)
 {
     var d = direction?.Trim().ToLowerInvariant();
     return d is "outbound" ? "outbound" : "inbound";
+}
+
+static int? NormalizeSimSlotIndex(int? simSlotIndex)
+{
+    return simSlotIndex is >= 0 and <= 7 ? simSlotIndex : null;
+}
+
+static int? NormalizeSimCount(int? simCount)
+{
+    return simCount is >= 1 and <= 8 ? simCount : null;
+}
+
+static string? NormalizeOptionalText(string? value, int maxLength)
+{
+    var normalized = value?.Trim();
+    if (string.IsNullOrWhiteSpace(normalized))
+    {
+        return null;
+    }
+
+    return normalized.Length <= maxLength ? normalized : normalized[..maxLength];
 }
 
 static string EncryptByPublicKey(string plainText, string publicPem)
@@ -312,6 +383,89 @@ static IResult? ValidateGatewayPayload(GatewaySmsPayload payload)
         return Results.BadRequest("messageId too long");
     }
 
+    if (payload.SimSlotIndex.HasValue && payload.SimSlotIndex.Value is < 0 or > 7)
+    {
+        return Results.BadRequest("simSlotIndex invalid");
+    }
+
+    if (!string.IsNullOrWhiteSpace(payload.SimPhoneNumber) && !IsValidPhone(payload.SimPhoneNumber))
+    {
+        return Results.BadRequest("simPhoneNumber invalid");
+    }
+
+    if (payload.SimCount.HasValue && payload.SimCount.Value is < 1 or > 8)
+    {
+        return Results.BadRequest("simCount invalid");
+    }
+
+    return null;
+}
+
+static IResult? ValidateGatewaySimStateRequest(UpsertGatewaySimStateRequest req)
+{
+    if (string.IsNullOrWhiteSpace(req.DeviceId))
+    {
+        return Results.BadRequest("deviceId required");
+    }
+
+    if (req.DeviceId.Length > 128)
+    {
+        return Results.BadRequest("deviceId too long");
+    }
+
+    if (req.Profiles is null)
+    {
+        return Results.BadRequest("profiles required");
+    }
+
+    if (req.Profiles.Count > 8)
+    {
+        return Results.BadRequest("too many sim profiles");
+    }
+
+    if (req.Profiles.GroupBy(x => x.SlotIndex).Any(x => x.Count() > 1))
+    {
+        return Results.BadRequest("duplicate sim slot index");
+    }
+
+    foreach (var profile in req.Profiles)
+    {
+        if (ValidateGatewaySimProfile(profile) is { } error)
+        {
+            return error;
+        }
+    }
+
+    return null;
+}
+
+static IResult? ValidateGatewaySimProfile(GatewaySimProfilePayload profile)
+{
+    if (profile.SlotIndex is < 0 or > 7)
+    {
+        return Results.BadRequest("sim slot invalid");
+    }
+
+    if (profile.SubscriptionId.HasValue && profile.SubscriptionId.Value < 0)
+    {
+        return Results.BadRequest("subscriptionId invalid");
+    }
+
+    if (!string.IsNullOrWhiteSpace(profile.DisplayName) && profile.DisplayName.Length > 128)
+    {
+        return Results.BadRequest("displayName too long");
+    }
+
+    if (!string.IsNullOrWhiteSpace(profile.PhoneNumber) && !IsValidPhone(profile.PhoneNumber))
+    {
+        return Results.BadRequest("phoneNumber invalid");
+    }
+
+    if (profile.SimCount.HasValue && profile.SimCount.Value is < 1 or > 8)
+    {
+        return Results.BadRequest("simCount invalid");
+    }
+
     return null;
 }
 
@@ -337,6 +491,11 @@ static IResult? ValidateSendRequest(SendSmsRequest req)
     if (req.Content.Length > 8192)
     {
         return Results.BadRequest("content too large");
+    }
+
+    if (req.SimSlotIndex.HasValue && req.SimSlotIndex.Value is < 0 or > 7)
+    {
+        return Results.BadRequest("simSlotIndex invalid");
     }
 
     return null;
@@ -381,10 +540,10 @@ public static class RuntimeLayout
 
 public static class MessageIdentity
 {
-    public static string Build(string deviceId, string phone, string content, long timestamp, string direction)
+    public static string Build(string deviceId, string phone, string content, long timestamp, string direction, int? simSlotIndex = null)
     {
         using var sha = SHA256.Create();
-        var raw = $"{deviceId}|{phone}|{timestamp}|{direction}|{content}";
+        var raw = $"{deviceId}|{phone}|{timestamp}|{direction}|{simSlotIndex?.ToString() ?? "-1"}|{content}";
         var hash = sha.ComputeHash(Encoding.UTF8.GetBytes(raw));
         return Convert.ToHexString(hash)[..24].ToLowerInvariant();
     }
@@ -653,14 +812,17 @@ public sealed class SqliteRepository
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-INSERT OR IGNORE INTO messages(id, device_id, phone, content, timestamp, direction)
-VALUES($id,$deviceId,$phone,$content,$timestamp,$direction);";
+INSERT OR IGNORE INTO messages(id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count)
+VALUES($id,$deviceId,$phone,$content,$timestamp,$direction,$simSlotIndex,$simPhoneNumber,$simCount);";
         cmd.Parameters.AddWithValue("$id", payload.Id);
         cmd.Parameters.AddWithValue("$deviceId", payload.DeviceId);
         cmd.Parameters.AddWithValue("$phone", payload.Phone);
         cmd.Parameters.AddWithValue("$content", payload.Content);
         cmd.Parameters.AddWithValue("$timestamp", payload.Timestamp);
         cmd.Parameters.AddWithValue("$direction", payload.Direction);
+        cmd.Parameters.AddWithValue("$simSlotIndex", (object?)payload.SimSlotIndex ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$simPhoneNumber", (object?)payload.SimPhoneNumber ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$simCount", (object?)payload.SimCount ?? DBNull.Value);
         return cmd.ExecuteNonQuery() > 0;
     }
 
@@ -684,7 +846,7 @@ VALUES($id,$deviceId,$phone,$content,$timestamp,$direction);";
         }
 
         cmd.CommandText = $@"
-SELECT id, device_id, phone, content, timestamp, direction
+SELECT id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count
 FROM messages
 WHERE {string.Join(" AND ", where)}
 ORDER BY timestamp ASC
@@ -701,7 +863,10 @@ LIMIT $limit;";
                 Phone: reader.GetString(2),
                 Content: reader.GetString(3),
                 Timestamp: reader.GetInt64(4),
-                Direction: reader.GetString(5)
+                Direction: reader.GetString(5),
+                SimSlotIndex: reader.IsDBNull(6) ? null : reader.GetInt32(6),
+                SimPhoneNumber: reader.IsDBNull(7) ? null : reader.GetString(7),
+                SimCount: reader.IsDBNull(8) ? null : reader.GetInt32(8)
             ));
         }
 
@@ -781,6 +946,84 @@ ON CONFLICT(device_id) DO UPDATE SET
         return v?.ToString();
     }
 
+    public void ReplaceGatewaySimProfiles(string deviceId, IReadOnlyList<GatewaySimProfilePayload> profiles)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+
+        using (var del = conn.CreateCommand())
+        {
+            del.Transaction = tx;
+            del.CommandText = "DELETE FROM gateway_sim_profiles WHERE device_id = $deviceId;";
+            del.Parameters.AddWithValue("$deviceId", deviceId);
+            del.ExecuteNonQuery();
+        }
+
+        foreach (var profile in profiles)
+        {
+            using var insert = conn.CreateCommand();
+            insert.Transaction = tx;
+            insert.CommandText = @"
+INSERT INTO gateway_sim_profiles(device_id, slot_index, subscription_id, display_name, phone_number, sim_count, updated_at)
+VALUES($deviceId, $slotIndex, $subscriptionId, $displayName, $phoneNumber, $simCount, $updatedAt);";
+            insert.Parameters.AddWithValue("$deviceId", deviceId);
+            insert.Parameters.AddWithValue("$slotIndex", profile.SlotIndex);
+            insert.Parameters.AddWithValue("$subscriptionId", (object?)profile.SubscriptionId ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$displayName", (object?)NormalizeProfileText(profile.DisplayName, 128) ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$phoneNumber", (object?)NormalizeProfileText(profile.PhoneNumber, 64) ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$simCount", NormalizeProfileSimCount(profile.SimCount, profiles.Count));
+            insert.Parameters.AddWithValue("$updatedAt", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            insert.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    public IReadOnlyList<GatewaySimProfileRecord> GetGatewaySimProfiles(string deviceId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+SELECT device_id, slot_index, subscription_id, display_name, phone_number, sim_count, updated_at
+FROM gateway_sim_profiles
+WHERE device_id = $deviceId
+ORDER BY slot_index ASC;";
+        cmd.Parameters.AddWithValue("$deviceId", deviceId);
+
+        var list = new List<GatewaySimProfileRecord>();
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new GatewaySimProfileRecord(
+                DeviceId: reader.GetString(0),
+                SlotIndex: reader.GetInt32(1),
+                SubscriptionId: reader.IsDBNull(2) ? null : reader.GetInt32(2),
+                DisplayName: reader.IsDBNull(3) ? null : reader.GetString(3),
+                PhoneNumber: reader.IsDBNull(4) ? null : reader.GetString(4),
+                SimCount: reader.IsDBNull(5) ? 0 : reader.GetInt32(5),
+                UpdatedAt: reader.IsDBNull(6) ? 0 : reader.GetInt64(6)
+            ));
+        }
+
+        return list;
+    }
+
+    public GatewaySimProfileRecord? ResolveGatewaySimProfile(string deviceId, int? simSlotIndex)
+    {
+        var profiles = GetGatewaySimProfiles(deviceId);
+        if (profiles.Count == 0)
+        {
+            return null;
+        }
+
+        if (simSlotIndex.HasValue)
+        {
+            return profiles.FirstOrDefault(x => x.SlotIndex == simSlotIndex.Value);
+        }
+
+        return profiles.Count == 1 ? profiles[0] : null;
+    }
+
     public void InsertApiLog(string method, string path, int statusCode, string remoteIp, long durationMs)
     {
         using var conn = Open();
@@ -853,7 +1096,10 @@ CREATE TABLE IF NOT EXISTS messages(
     phone TEXT NOT NULL,
     content TEXT NOT NULL,
     timestamp INTEGER NOT NULL,
-    direction TEXT NOT NULL
+    direction TEXT NOT NULL,
+    sim_slot_index INTEGER,
+    sim_phone_number TEXT,
+    sim_count INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS outbox(
@@ -874,6 +1120,17 @@ CREATE TABLE IF NOT EXISTS gateways(
     updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS gateway_sim_profiles(
+    device_id TEXT NOT NULL,
+    slot_index INTEGER NOT NULL,
+    subscription_id INTEGER,
+    display_name TEXT,
+    phone_number TEXT,
+    sim_count INTEGER,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY(device_id, slot_index)
+);
+
 CREATE TABLE IF NOT EXISTS api_logs(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     method TEXT NOT NULL,
@@ -886,21 +1143,87 @@ CREATE TABLE IF NOT EXISTS api_logs(
 
 CREATE INDEX IF NOT EXISTS idx_messages_phone_ts ON messages(phone, timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
+CREATE INDEX IF NOT EXISTS idx_gateway_sim_profiles_device_id ON gateway_sim_profiles(device_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_device_id ON outbox(device_id);
 CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
 ";
         cmd.ExecuteNonQuery();
+        EnsureColumns(conn);
+    }
+
+    private void EnsureColumns(SqliteConnection conn)
+    {
+        TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_slot_index INTEGER;");
+        TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_phone_number TEXT;");
+        TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_count INTEGER;");
+    }
+
+    private void TryExecuteNonQuery(SqliteConnection conn, string sql)
+    {
+        try
+        {
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = sql;
+            cmd.ExecuteNonQuery();
+        }
+        catch (SqliteException)
+        {
+            // ignore when the column already exists
+        }
+    }
+
+    private string? NormalizeProfileText(string? value, int maxLength)
+    {
+        var normalized = value?.Trim();
+        if (string.IsNullOrWhiteSpace(normalized))
+        {
+            return null;
+        }
+
+        return normalized.Length <= maxLength ? normalized : normalized[..maxLength];
+    }
+
+    private int NormalizeProfileSimCount(int? simCount, int fallback)
+    {
+        if (simCount is >= 1 and <= 8)
+        {
+            return simCount.Value;
+        }
+
+        return Math.Clamp(fallback, 1, 8);
     }
 }
 
 public record RegisterGatewayRequest(string DeviceId, string PublicKeyPem);
 public record UploadSmsRequest(string DeviceId, string EncryptedPayloadBase64);
-public record SendSmsRequest(string DeviceId, string TargetPhone, string Content);
+public record SendSmsRequest(string DeviceId, string TargetPhone, string Content, int? SimSlotIndex = null);
 public record PinConversationRequest(string Phone, bool Pinned);
+public record UpsertGatewaySimStateRequest(string DeviceId, IReadOnlyList<GatewaySimProfilePayload> Profiles);
+public record GatewaySimProfilePayload(int SlotIndex, int? SubscriptionId = null, string? DisplayName = null, string? PhoneNumber = null, int? SimCount = null);
 
-public record GatewaySmsPayload(string Phone, string Content, long Timestamp, string? Direction = null, string? MessageId = null);
-public record SmsPayload(string Id, string DeviceId, string Phone, string Content, long Timestamp, string Direction = "unknown");
-public record OutboundInstruction(string TargetPhone, string Content);
+public record GatewaySmsPayload(
+    string Phone,
+    string Content,
+    long Timestamp,
+    string? Direction = null,
+    string? MessageId = null,
+    int? SimSlotIndex = null,
+    string? SimPhoneNumber = null,
+    int? SimCount = null
+);
+public record SmsPayload(
+    string Id,
+    string DeviceId,
+    string Phone,
+    string Content,
+    long Timestamp,
+    string Direction = "unknown",
+    int? SimSlotIndex = null,
+    string? SimPhoneNumber = null,
+    int? SimCount = null
+);
+public record OutboundInstruction(string TargetPhone, string Content, int? SimSlotIndex = null);
+public record GatewaySimProfileRecord(string DeviceId, int SlotIndex, int? SubscriptionId, string? DisplayName, string? PhoneNumber, int SimCount, long UpdatedAt);
 
 public sealed class PendingOutbound
 {

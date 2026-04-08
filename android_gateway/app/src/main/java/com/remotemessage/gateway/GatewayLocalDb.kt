@@ -11,7 +11,10 @@ data class PendingUpload(
     val content: String,
     val timestamp: Long,
     val direction: String,
-    val messageId: String?
+    val messageId: String?,
+    val simSlotIndex: Int?,
+    val simPhoneNumber: String?,
+    val simCount: Int?
 )
 
 data class PendingUploadInput(
@@ -19,10 +22,13 @@ data class PendingUploadInput(
     val content: String,
     val timestamp: Long,
     val direction: String,
-    val messageId: String?
+    val messageId: String?,
+    val simSlotIndex: Int? = null,
+    val simPhoneNumber: String? = null,
+    val simCount: Int? = null
 )
 
-class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_private.db", null, 2) {
+class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_private.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL(
             """
@@ -32,7 +38,10 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
                 content TEXT NOT NULL,
                 timestamp INTEGER NOT NULL,
                 direction TEXT NOT NULL,
-                message_id TEXT
+                message_id TEXT,
+                sim_slot_index INTEGER,
+                sim_phone_number TEXT,
+                sim_count INTEGER
             )
             """.trimIndent()
         )
@@ -40,16 +49,29 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
+        ensureColumns(db)
         ensureIndexes(db)
     }
 
-    fun enqueueUpload(phone: String, content: String, timestamp: Long, direction: String, messageId: String?) {
+    fun enqueueUpload(
+        phone: String,
+        content: String,
+        timestamp: Long,
+        direction: String,
+        messageId: String?,
+        simSlotIndex: Int? = null,
+        simPhoneNumber: String? = null,
+        simCount: Int? = null
+    ) {
         val values = ContentValues().apply {
             put("phone", phone)
             put("content", content)
             put("timestamp", timestamp)
             put("direction", direction)
             put("message_id", messageId)
+            put("sim_slot_index", simSlotIndex)
+            put("sim_phone_number", simPhoneNumber)
+            put("sim_count", simCount)
         }
         writableDatabase.insertWithOnConflict("pending_uploads", null, values, SQLiteDatabase.CONFLICT_IGNORE)
     }
@@ -67,6 +89,9 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
                     put("timestamp", item.timestamp)
                     put("direction", item.direction)
                     put("message_id", item.messageId)
+                    put("sim_slot_index", item.simSlotIndex)
+                    put("sim_phone_number", item.simPhoneNumber)
+                    put("sim_count", item.simCount)
                 }
                 db.insertWithOnConflict("pending_uploads", null, values, SQLiteDatabase.CONFLICT_IGNORE)
             }
@@ -80,7 +105,7 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
         val result = mutableListOf<PendingUpload>()
         val cursor = readableDatabase.query(
             "pending_uploads",
-            arrayOf("id", "phone", "content", "timestamp", "direction", "message_id"),
+            arrayOf("id", "phone", "content", "timestamp", "direction", "message_id", "sim_slot_index", "sim_phone_number", "sim_count"),
             null,
             null,
             null,
@@ -95,6 +120,9 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
             val tsIdx = it.getColumnIndexOrThrow("timestamp")
             val dirIdx = it.getColumnIndexOrThrow("direction")
             val msgIdIdx = it.getColumnIndexOrThrow("message_id")
+            val simSlotIdx = it.getColumnIndex("sim_slot_index")
+            val simPhoneIdx = it.getColumnIndex("sim_phone_number")
+            val simCountIdx = it.getColumnIndex("sim_count")
             while (it.moveToNext()) {
                 result.add(
                     PendingUpload(
@@ -103,7 +131,10 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
                         content = it.getString(contentIdx) ?: "",
                         timestamp = it.getLong(tsIdx),
                         direction = it.getString(dirIdx) ?: "inbound",
-                        messageId = it.getString(msgIdIdx)
+                        messageId = it.getString(msgIdIdx),
+                        simSlotIndex = if (simSlotIdx >= 0 && !it.isNull(simSlotIdx)) it.getInt(simSlotIdx) else null,
+                        simPhoneNumber = if (simPhoneIdx >= 0) it.getString(simPhoneIdx) else null,
+                        simCount = if (simCountIdx >= 0 && !it.isNull(simCountIdx)) it.getInt(simCountIdx) else null
                     )
                 )
             }
@@ -135,6 +166,12 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
         cursor.use {
             return if (it.moveToFirst()) it.getInt(0) else 0
         }
+    }
+
+    private fun ensureColumns(db: SQLiteDatabase) {
+        runCatching { db.execSQL("ALTER TABLE pending_uploads ADD COLUMN sim_slot_index INTEGER") }
+        runCatching { db.execSQL("ALTER TABLE pending_uploads ADD COLUMN sim_phone_number TEXT") }
+        runCatching { db.execSQL("ALTER TABLE pending_uploads ADD COLUMN sim_count INTEGER") }
     }
 
     private fun ensureIndexes(db: SQLiteDatabase) {

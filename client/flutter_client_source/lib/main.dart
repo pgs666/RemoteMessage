@@ -87,6 +87,8 @@ class _MessageHomePageState extends State<MessageHomePage> {
   Timer? _searchDebounceTimer;
   List<ConversationSummary> _conversationCache = const [];
   List<SmsItem> _activeMessageCache = const [];
+  List<DeviceSimProfile> _gatewaySimProfiles = const [];
+  int? _selectedSendSimSlot;
 
   bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
@@ -119,7 +121,9 @@ class _MessageHomePageState extends State<MessageHomePage> {
     await _db.init();
     _lastSyncTs = await _db.getMetaInt('lastSyncTs') ?? 0;
     _activePhone = await _db.getMetaString('activePhone');
+    _selectedSendSimSlot = await _db.getMetaInt('selectedSendSimSlot');
     await _refreshLocalCaches();
+    await _refreshGatewaySimProfiles(interactive: false);
     await _syncInbox(fullSync: true, interactive: true);
     _startAutoRefresh();
     if (mounted) {
@@ -200,7 +204,49 @@ class _MessageHomePageState extends State<MessageHomePage> {
     widget.onThemeChanged(result.themeMode);
     setState(() => _status = tr('设置已更新', 'Settings updated'));
     _startAutoRefresh();
+    await _refreshGatewaySimProfiles(interactive: false);
     await _syncInbox(fullSync: true, interactive: true);
+  }
+
+  Future<void> _refreshGatewaySimProfiles({bool interactive = false}) async {
+    final server = _serverCtrl.text.trim();
+    final device = _deviceCtrl.text.trim();
+    if (server.isEmpty || device.isEmpty) return;
+
+    try {
+      final response = await _getJson(
+        Uri.parse('$server/api/client/device-sims?deviceId=${Uri.encodeQueryComponent(device)}'),
+        password: widget.settings.password,
+      );
+      final list = (jsonDecode(response) as List)
+          .map((e) => DeviceSimProfile.fromJson(e as Map<String, dynamic>))
+          .toList()
+        ..sort((a, b) => a.slotIndex.compareTo(b.slotIndex));
+
+      final allowedSlotIndexes = list.map((e) => e.slotIndex).toSet();
+      int? selected = _selectedSendSimSlot;
+      if (selected != null && !allowedSlotIndexes.contains(selected)) {
+        selected = null;
+      }
+      if (selected == null && list.isNotEmpty) {
+        selected = list.first.slotIndex;
+      }
+      _selectedSendSimSlot = selected;
+      if (selected != null) {
+        await _db.setMetaInt('selectedSendSimSlot', selected);
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _gatewaySimProfiles = list;
+        if (interactive) {
+          _status = tr('已刷新 SIM 信息', 'SIM info refreshed');
+        }
+      });
+    } catch (e) {
+      if (!interactive || !mounted) return;
+      setState(() => _status = '${tr('SIM 信息刷新失败', 'SIM info refresh failed')}: $e');
+    }
   }
 
   Future<void> _syncInbox({bool fullSync = false, bool interactive = true}) async {
@@ -225,6 +271,8 @@ class _MessageHomePageState extends State<MessageHomePage> {
       final list = (jsonDecode(response) as List)
           .map((e) => SmsItem.fromJson(e as Map<String, dynamic>))
           .toList();
+
+      await _refreshGatewaySimProfiles(interactive: false);
 
       if (interactive && mounted) {
         setState(() {
@@ -320,6 +368,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
         'deviceId': device,
         'targetPhone': phone,
         'content': content,
+        if (_showSimSelection) 'simSlotIndex': _selectedSendSimSlot,
       }, password: widget.settings.password);
       _composerCtrl.clear();
       await _syncInbox(interactive: true);
@@ -425,6 +474,13 @@ class _MessageHomePageState extends State<MessageHomePage> {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Text('${tr('状态', 'Status')}: $_status'),
+        if (_gatewaySimProfiles.isNotEmpty) ...[
+          const SizedBox(height: 4),
+          Text(
+            _buildGatewaySimSummary(),
+            style: Theme.of(context).textTheme.bodySmall,
+          ),
+        ],
         if (showProgress) ...[
           const SizedBox(height: 8),
           LinearProgressIndicator(value: _syncProgress),
@@ -509,7 +565,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
               return ListTile(
                 selected: selected,
                 leading: c.pinned ? const Icon(Icons.push_pin, size: 18) : null,
-                            title: Text(c.phone),
+                title: Text(c.phone),
                 subtitle: Text(c.lastMessage.content, maxLines: 1, overflow: TextOverflow.ellipsis),
                 onTap: () async {
                   await _setActivePhone(c.phone);
@@ -554,28 +610,39 @@ class _MessageHomePageState extends State<MessageHomePage> {
                   itemBuilder: (context, index) {
                     final m = messages[index];
                     final mine = m.direction == 'outbound';
+                    final simLabel = _simLabelForMessage(m);
                     return Align(
                       alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-                      child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                        padding: const EdgeInsets.all(10),
-                        constraints: const BoxConstraints(maxWidth: 460),
-                        decoration: BoxDecoration(
-                          color: mine
-                              ? Theme.of(context).colorScheme.primaryContainer
-                              : Theme.of(context).colorScheme.surfaceContainerHighest,
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                        child: Column(
-                          crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                          children: [
-                            Text(m.content),
-                            const SizedBox(height: 4),
-                            Text(
-                              DateTime.fromMillisecondsSinceEpoch(m.timestamp).toLocal().toString(),
-                              style: Theme.of(context).textTheme.bodySmall,
-                            ),
-                          ],
+                      child: GestureDetector(
+                        onLongPress: () => _showSimPhoneDialog(m),
+                        child: Container(
+                          margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                          padding: const EdgeInsets.all(10),
+                          constraints: const BoxConstraints(maxWidth: 460),
+                          decoration: BoxDecoration(
+                            color: mine
+                                ? Theme.of(context).colorScheme.primaryContainer
+                                : Theme.of(context).colorScheme.surfaceContainerHighest,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                            children: [
+                              if (simLabel != null) ...[
+                                Text(
+                                  simLabel,
+                                  style: Theme.of(context).textTheme.labelSmall,
+                                ),
+                                const SizedBox(height: 4),
+                              ],
+                              Text(m.content),
+                              const SizedBox(height: 4),
+                              Text(
+                                DateTime.fromMillisecondsSinceEpoch(m.timestamp).toLocal().toString(),
+                                style: Theme.of(context).textTheme.bodySmall,
+                              ),
+                            ],
+                          ),
                         ),
                       ),
                     );
@@ -589,6 +656,35 @@ class _MessageHomePageState extends State<MessageHomePage> {
             padding: const EdgeInsets.all(8),
             child: Row(
               children: [
+                if (_showSimSelection) ...[
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(minWidth: 96, maxWidth: 120),
+                    child: DropdownButtonFormField<int>(
+                      value: _selectedSendSimSlot,
+                      decoration: InputDecoration(
+                        border: const OutlineInputBorder(),
+                        labelText: tr('发送卡', 'SIM'),
+                      ),
+                      items: _gatewaySimProfiles
+                          .map(
+                            (sim) => DropdownMenuItem<int>(
+                              value: sim.slotIndex,
+                              child: Text(_displaySimLabel(sim.slotIndex)),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: _loading
+                          ? null
+                          : (value) async {
+                              setState(() => _selectedSendSimSlot = value);
+                              if (value != null) {
+                                await _db.setMetaInt('selectedSendSimSlot', value);
+                              }
+                            },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                ],
                 Expanded(
                   child: TextField(
                     controller: _composerCtrl,
@@ -616,6 +712,74 @@ class _MessageHomePageState extends State<MessageHomePage> {
     _searchCtrl.dispose();
     _composerCtrl.dispose();
     super.dispose();
+  }
+
+  bool get _showSimSelection => _gatewaySimProfiles.length > 1;
+
+  String _buildGatewaySimSummary() {
+    return _gatewaySimProfiles.map((sim) {
+      final label = _displaySimLabel(sim.slotIndex);
+      final num = sim.phoneNumber?.trim();
+      if (num == null || num.isEmpty) return label;
+      return '$label: $num';
+    }).join('    ');
+  }
+
+  String _displaySimLabel(int slotIndex) {
+    return tr('卡${slotIndex + 1}', 'SIM ${slotIndex + 1}');
+  }
+
+  String? _simLabelForMessage(SmsItem item) {
+    final simCount = item.simCount ?? _gatewaySimProfiles.length;
+    if (simCount <= 1 || item.simSlotIndex == null) {
+      return null;
+    }
+    return _displaySimLabel(item.simSlotIndex!);
+  }
+
+  Future<void> _showSimPhoneDialog(SmsItem item) async {
+    final phone = item.simPhoneNumber?.trim();
+    if (phone == null || phone.isEmpty) return;
+    final label = _simLabelForMessage(item) ?? tr('号码', 'Number');
+    await showDialog<void>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(label),
+        content: SelectableText(phone),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: Text(tr('关闭', 'Close')),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class DeviceSimProfile {
+  final int slotIndex;
+  final int? subscriptionId;
+  final String? displayName;
+  final String? phoneNumber;
+  final int? simCount;
+
+  DeviceSimProfile({
+    required this.slotIndex,
+    this.subscriptionId,
+    this.displayName,
+    this.phoneNumber,
+    this.simCount,
+  });
+
+  factory DeviceSimProfile.fromJson(Map<String, dynamic> json) {
+    return DeviceSimProfile(
+      slotIndex: (json['slotIndex'] as num?)?.toInt() ?? 0,
+      subscriptionId: (json['subscriptionId'] as num?)?.toInt(),
+      displayName: json['displayName']?.toString(),
+      phoneNumber: json['phoneNumber']?.toString(),
+      simCount: (json['simCount'] as num?)?.toInt(),
+    );
   }
 }
 
@@ -938,10 +1102,10 @@ class LocalDatabase {
     final db = _db!;
     db.execute(
       '''
-      INSERT OR IGNORE INTO messages(id, device_id, phone, content, timestamp, direction)
-      VALUES(?, ?, ?, ?, ?, ?);
+      INSERT OR IGNORE INTO messages(id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count)
+      VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);
       ''',
-      [item.id, item.deviceId, item.phone, item.content, item.timestamp, item.direction],
+      [item.id, item.deviceId, item.phone, item.content, item.timestamp, item.direction, item.simSlotIndex, item.simPhoneNumber, item.simCount],
     );
     final changes = db.select('SELECT changes() AS c;').first['c'] as int;
     return changes > 0;
@@ -962,10 +1126,10 @@ class LocalDatabase {
         final item = items[i];
         db.execute(
           '''
-          INSERT OR IGNORE INTO messages(id, device_id, phone, content, timestamp, direction)
-          VALUES(?, ?, ?, ?, ?, ?);
+          INSERT OR IGNORE INTO messages(id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count)
+          VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?);
           ''',
-          [item.id, item.deviceId, item.phone, item.content, item.timestamp, item.direction],
+          [item.id, item.deviceId, item.phone, item.content, item.timestamp, item.direction, item.simSlotIndex, item.simPhoneNumber, item.simCount],
         );
         final changes = db.select('SELECT changes() AS c;').first['c'] as int;
         if (changes > 0) {
@@ -986,7 +1150,7 @@ class LocalDatabase {
   Future<List<SmsItem>> getMessagesByPhone(String phone) async {
     await init();
     final rows = _db!.select(
-      'SELECT id, device_id, phone, content, timestamp, direction FROM messages WHERE phone = ? ORDER BY timestamp ASC;',
+      'SELECT id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count FROM messages WHERE phone = ? ORDER BY timestamp ASC;',
       [phone],
     );
     return rows
@@ -998,6 +1162,9 @@ class LocalDatabase {
             content: r['content']?.toString() ?? '',
             timestamp: (r['timestamp'] as num?)?.toInt() ?? 0,
             direction: r['direction']?.toString() ?? 'inbound',
+            simSlotIndex: (r['sim_slot_index'] as num?)?.toInt(),
+            simPhoneNumber: r['sim_phone_number']?.toString(),
+            simCount: (r['sim_count'] as num?)?.toInt(),
           ),
         )
         .toList();
@@ -1017,6 +1184,9 @@ class LocalDatabase {
         m.content,
         m.timestamp,
         m.direction,
+        m.sim_slot_index,
+        m.sim_phone_number,
+        m.sim_count,
         CASE WHEN p.phone IS NULL THEN 0 ELSE 1 END AS pinned
       FROM messages m
       LEFT JOIN pins p ON p.phone = m.phone
@@ -1054,6 +1224,9 @@ class LocalDatabase {
               content: r['content']?.toString() ?? '',
               timestamp: (r['timestamp'] as num?)?.toInt() ?? 0,
               direction: r['direction']?.toString() ?? 'inbound',
+              simSlotIndex: (r['sim_slot_index'] as num?)?.toInt(),
+              simPhoneNumber: r['sim_phone_number']?.toString(),
+              simCount: (r['sim_count'] as num?)?.toInt(),
             ),
           ),
         )
@@ -1111,9 +1284,15 @@ class LocalDatabase {
         phone TEXT NOT NULL,
         content TEXT NOT NULL,
         timestamp INTEGER NOT NULL,
-        direction TEXT NOT NULL
+        direction TEXT NOT NULL,
+        sim_slot_index INTEGER,
+        sim_phone_number TEXT,
+        sim_count INTEGER
       );
     ''');
+    _tryAlterTable(db, 'ALTER TABLE messages ADD COLUMN sim_slot_index INTEGER;');
+    _tryAlterTable(db, 'ALTER TABLE messages ADD COLUMN sim_phone_number TEXT;');
+    _tryAlterTable(db, 'ALTER TABLE messages ADD COLUMN sim_count INTEGER;');
     db.execute('CREATE INDEX IF NOT EXISTS idx_messages_phone_ts ON messages(phone, timestamp);');
     db.execute('CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);');
     db.execute('CREATE INDEX IF NOT EXISTS idx_messages_phone_ts_id ON messages(phone, timestamp DESC, id DESC);');
@@ -1132,6 +1311,14 @@ class LocalDatabase {
       );
     ''');
   }
+
+  void _tryAlterTable(sqlite.Database db, String sql) {
+    try {
+      db.execute(sql);
+    } catch (_) {
+      // ignore existing column errors
+    }
+  }
 }
 
 class SmsItem {
@@ -1141,6 +1328,9 @@ class SmsItem {
   final String content;
   final int timestamp;
   final String direction;
+  final int? simSlotIndex;
+  final String? simPhoneNumber;
+  final int? simCount;
 
   SmsItem({
     required this.id,
@@ -1149,6 +1339,9 @@ class SmsItem {
     required this.content,
     required this.timestamp,
     required this.direction,
+    this.simSlotIndex,
+    this.simPhoneNumber,
+    this.simCount,
   });
 
   factory SmsItem.fromJson(Map<String, dynamic> json) {
@@ -1159,6 +1352,9 @@ class SmsItem {
       content: json['content']?.toString() ?? '',
       timestamp: (json['timestamp'] as num?)?.toInt() ?? 0,
       direction: json['direction']?.toString() ?? 'inbound',
+      simSlotIndex: (json['simSlotIndex'] as num?)?.toInt(),
+      simPhoneNumber: json['simPhoneNumber']?.toString(),
+      simCount: (json['simCount'] as num?)?.toInt(),
     );
   }
 
@@ -1169,6 +1365,9 @@ class SmsItem {
         'content': content,
         'timestamp': timestamp,
         'direction': direction,
+        'simSlotIndex': simSlotIndex,
+        'simPhoneNumber': simPhoneNumber,
+        'simCount': simCount,
       };
 }
 

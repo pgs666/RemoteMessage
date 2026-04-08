@@ -18,6 +18,7 @@ class SmsReceiver : BroadcastReceiver() {
         if (server.isBlank() || deviceId.isBlank()) return
 
         val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId, simSubId = simSubId)
+        val resolvedSim = GatewaySimSupport.resolveForIntent(context, intent, simSubId)
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
         messages.forEach { sms ->
             val direction = "inbound"
@@ -26,7 +27,8 @@ class SmsReceiver : BroadcastReceiver() {
                 phone = sms.originatingAddress ?: "unknown",
                 content = sms.messageBody ?: "",
                 timestamp = sms.timestampMillis,
-                direction = direction
+                direction = direction,
+                simSlotIndex = resolvedSim.slotIndex
             )
             GatewayRuntime.uploadInboundSms(
                 context = context,
@@ -35,7 +37,10 @@ class SmsReceiver : BroadcastReceiver() {
                 content = sms.messageBody ?: "",
                 timestamp = sms.timestampMillis,
                 direction = direction,
-                messageId = msgId
+                messageId = msgId,
+                simSlotIndex = resolvedSim.slotIndex,
+                simPhoneNumber = resolvedSim.simPhoneNumber,
+                simCount = resolvedSim.simCount.takeIf { it > 0 }
             )
         }
     }

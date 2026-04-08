@@ -26,6 +26,7 @@ class GatewaySyncWorker(
 
         val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId, simSubId = simSubId)
         return runCatching {
+            GatewayRuntime.pushSimStateSync(applicationContext, cfg)
             GatewayRuntime.flushPendingUploads(applicationContext, cfg)
             GatewayRuntime.pollAndSendSync(applicationContext, cfg)
             Result.success()

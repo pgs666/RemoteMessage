@@ -15,6 +15,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.ProgressBar
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
@@ -59,9 +60,12 @@ class MainActivity : ComponentActivity() {
         val editServer = findViewById<EditText>(R.id.editServer)
         val editDeviceId = findViewById<EditText>(R.id.editDeviceId)
         val editSimSubId = findViewById<EditText>(R.id.editSimSubId)
+        val editSim1Phone = findViewById<EditText>(R.id.editSim1Phone)
+        val editSim2Phone = findViewById<EditText>(R.id.editSim2Phone)
         val editApiKey = findViewById<EditText>(R.id.editApiKey)
         val editWebUiPort = findViewById<EditText>(R.id.editWebUiPort)
         val textStatus = findViewById<TextView>(R.id.textStatus)
+        val textSimInfo = findViewById<TextView>(R.id.textSimInfo)
         val progressSync = findViewById<ProgressBar>(R.id.progressSync)
         val btnSave = findViewById<Button>(R.id.btnSave)
         val btnRegister = findViewById<Button>(R.id.btnRegister)
@@ -77,8 +81,11 @@ class MainActivity : ComponentActivity() {
         editServer.setText(pref.getString("server_base", "https://10.0.2.2:5001") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
         editSimSubId.setText(pref.getString("sim_sub_id", "") ?: "")
+        editSim1Phone.setText(pref.getString("sim_custom_number_0", "") ?: "")
+        editSim2Phone.setText(pref.getString("sim_custom_number_1", "") ?: "")
         editApiKey.setText(pref.getString("password", pref.getString("api_key", "")) ?: "")
         editWebUiPort.setText(pref.getString("webui_port", "8088") ?: "8088")
+        textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
 
         RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
 
@@ -116,13 +123,26 @@ class MainActivity : ComponentActivity() {
                 .putString("server_base", serverText)
                 .putString("device_id", deviceIdText)
                 .putString("sim_sub_id", editSimSubId.text.toString().trim())
+                .putString("sim_custom_number_0", editSim1Phone.text.toString().trim())
+                .putString("sim_custom_number_1", editSim2Phone.text.toString().trim())
                 .putString("password", passwordText)
                 .putString("webui_port", port.toString())
                 .apply()
             RuntimeConfig.password = passwordText
+            val cfg = GatewayConfig(
+                serverBaseUrl = serverText,
+                deviceId = deviceIdText,
+                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+            )
             GatewaySyncWorker.schedule(this)
             restartWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, editWebUiPort, textStatus)
+            textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
             textStatus.text = getString(R.string.status_saved_auto_sync)
+            GatewayRuntime.pushSimState(this, cfg) {
+                runOnUiThread {
+                    textStatus.text = getString(R.string.status_saved_auto_sync)
+                }
+            }
         }
 
         btnRegister.setOnClickListener {
@@ -136,6 +156,7 @@ class MainActivity : ComponentActivity() {
                 runOnUiThread {
                     hideProgress()
                     textStatus.text = it
+                    textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
                 }
             }
             GatewaySyncWorker.schedule(this)
@@ -185,6 +206,12 @@ class MainActivity : ComponentActivity() {
             GatewayRuntime.inspectLocalSmsAccess(this) {
                 runOnUiThread { textStatus.text = it }
             }
+        }
+
+        textSimInfo.setOnLongClickListener {
+            textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
+            Toast.makeText(this, getString(R.string.status_sim_info_refreshed), Toast.LENGTH_SHORT).show()
+            true
         }
 
         btnFlushPending.setOnClickListener {
@@ -428,8 +455,12 @@ class MainActivity : ComponentActivity() {
         val perms = mutableListOf(
             Manifest.permission.RECEIVE_SMS,
             Manifest.permission.READ_SMS,
-            Manifest.permission.SEND_SMS
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.READ_PHONE_STATE
         )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            perms.add(Manifest.permission.READ_PHONE_NUMBERS)
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             perms.add(Manifest.permission.POST_NOTIFICATIONS)
         }
