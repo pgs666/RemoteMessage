@@ -13,14 +13,24 @@ class SmsReceiver : BroadcastReceiver() {
         val prefs = context.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
         val server = prefs.getString("server_base", "") ?: ""
         val deviceId = prefs.getString("device_id", "") ?: ""
-        val simSubId = prefs.getString("sim_sub_id", "")?.toIntOrNull()
         RuntimeConfig.password = prefs.getString("password", prefs.getString("api_key", ""))?.ifBlank { null }
         if (server.isBlank() || deviceId.isBlank()) return
 
-        val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId, simSubId = simSubId)
-        val resolvedSim = GatewaySimSupport.resolveForIntent(context, intent, simSubId)
+        val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId)
+        val intentResolvedSim = GatewaySimSupport.resolveForIntent(context, intent)
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
         messages.forEach { sms ->
+            val resolvedSim = if (intentResolvedSim.slotIndex != null || !intentResolvedSim.simPhoneNumber.isNullOrBlank()) {
+                intentResolvedSim
+            } else {
+                GatewaySimSupport.resolveForSmsRecord(
+                    context = context,
+                    phone = sms.originatingAddress ?: "unknown",
+                    content = sms.messageBody ?: "",
+                    timestamp = sms.timestampMillis,
+                    inbound = true
+                )
+            }
             val direction = "inbound"
             val msgId = GatewayRuntime.buildMessageId(
                 deviceId = cfg.deviceId,

@@ -3,7 +3,6 @@
     <string name="app_name">RemoteMessage 网关</string>
     <string name="hint_server_base_url">服务器地址</string>
     <string name="hint_device_id">设备 ID</string>
-    <string name="hint_sim_sub_id">SIM 子卡 ID（可选）</string>
     <string name="hint_sim1_phone">卡 1 自定义号码（可选）</string>
     <string name="hint_sim2_phone">卡 2 自定义号码（可选）</string>
     <string name="hint_api_key">密码（旧标签）</string>
@@ -30,6 +29,7 @@
     <string name="status_cert_import_failed">证书导入失败：%1$s</string>
     <string name="status_sms_role_requested">已发起默认短信应用申请，请在系统弹窗中确认。</string>
     <string name="status_sms_role_held">当前应用已经是默认短信应用。</string>
+    <string name="status_sms_role_unavailable">当前设备无法拉起默认短信应用授权弹窗。</string>
     <string name="status_history_sync_preparing">正在准备历史短信同步…</string>
     <string name="status_history_sync_progress">历史短信同步进度：%1$d/%2$d</string>
     <string name="status_sim_info_empty">尚未加载 SIM 信息</string>

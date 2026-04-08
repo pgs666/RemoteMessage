@@ -35,17 +35,20 @@ class RespondViaMessageService : Service() {
 
         if (recipients.isEmpty()) return
 
-        val prefs = getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
-        val simSubId = prefs.getString("sim_sub_id", "")?.toIntOrNull()
-        val resolvedSim = GatewaySimSupport.resolveForIntent(this, intent, simSubId)
-        val smsManager = when (val subId = resolvedSim.subscriptionId ?: simSubId) {
+        val resolvedSim = GatewaySimSupport.resolveForIntent(this, intent)
+        val smsManager = when (val subId = resolvedSim.subscriptionId) {
             null -> SmsManager.getDefault()
             SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
             else -> SmsManager.getSmsManagerForSubscriptionId(subId)
         }
 
         recipients.forEach { phone ->
-            smsManager.sendTextMessage(phone, null, body, null, null)
+            val parts = smsManager.divideMessage(body)
+            if (parts.size <= 1) {
+                smsManager.sendTextMessage(phone, null, body, null, null)
+            } else {
+                smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+            }
         }
     }
 }

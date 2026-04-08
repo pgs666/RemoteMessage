@@ -566,7 +566,14 @@ class _MessageHomePageState extends State<MessageHomePage> {
                 selected: selected,
                 leading: c.pinned ? const Icon(Icons.push_pin, size: 18) : null,
                 title: Text(c.phone),
-                subtitle: Text(c.lastMessage.content, maxLines: 1, overflow: TextOverflow.ellipsis),
+                subtitle: Text(
+                  (() {
+                    final simLabel = _simLabelForMessage(c.lastMessage);
+                    return simLabel == null ? c.lastMessage.content : '$simLabel · ${c.lastMessage.content}';
+                  })(),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                ),
                 onTap: () async {
                   await _setActivePhone(c.phone);
                   if (onMobileTap && context.mounted) {
@@ -730,11 +737,21 @@ class _MessageHomePageState extends State<MessageHomePage> {
   }
 
   String? _simLabelForMessage(SmsItem item) {
+    final targetSimPhone = item.simPhoneNumber?.trim();
+    final inferredSlotIndex = item.simSlotIndex ?? _gatewaySimProfiles
+        .where((sim) {
+          final candidatePhone = sim.phoneNumber?.trim();
+          return candidatePhone != null && candidatePhone.isNotEmpty && candidatePhone == targetSimPhone;
+        })
+        .map((sim) => sim.slotIndex)
+        .cast<int?>()
+        .firstWhere((slot) => slot != null, orElse: () => null);
+    if (inferredSlotIndex == null) return null;
     final simCount = item.simCount ?? _gatewaySimProfiles.length;
-    if (simCount <= 1 || item.simSlotIndex == null) {
+    if (simCount <= 1 && _gatewaySimProfiles.length <= 1) {
       return null;
     }
-    return _displaySimLabel(item.simSlotIndex!);
+    return _displaySimLabel(inferredSlotIndex);
   }
 
   Future<void> _showSimPhoneDialog(SmsItem item) async {

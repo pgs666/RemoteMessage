@@ -219,7 +219,7 @@ app.MapPost("/api/client/send", (SendSmsRequest req, GatewayRegistry registry, S
             return Results.BadRequest("simSlotIndex invalid");
         }
     }
-    else if (gatewaySims.Count == 1)
+    else if (gatewaySims.Count > 0)
     {
         selectedSim = gatewaySims[0];
     }

@@ -1,11 +1,13 @@
 package com.remotemessage.gateway
 
 import android.app.Activity
+import android.app.AppOpsManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.PowerManager
+import android.os.Process
 import android.provider.Telephony
 import android.provider.Settings
 
@@ -21,19 +23,18 @@ object PermissionAndRoleHelper {
         }
     }
 
-    fun requestDefaultSmsRole(activity: Activity) {
-        if (isDefaultSmsApp(activity)) return
-
+    fun buildRequestDefaultSmsRoleIntent(activity: Activity): Intent? {
+        if (isDefaultSmsApp(activity)) return null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             val roleManager = activity.getSystemService(android.app.role.RoleManager::class.java)
             if (roleManager != null && roleManager.isRoleAvailable(android.app.role.RoleManager.ROLE_SMS) && !roleManager.isRoleHeld(android.app.role.RoleManager.ROLE_SMS)) {
-                val intent = roleManager.createRequestRoleIntent(android.app.role.RoleManager.ROLE_SMS)
-                activity.startActivity(intent)
+                return roleManager.createRequestRoleIntent(android.app.role.RoleManager.ROLE_SMS)
             }
+            return null
         } else {
-            val intent = Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT)
-            intent.putExtra(Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, activity.packageName)
-            activity.startActivity(intent)
+            return Intent(Telephony.Sms.Intents.ACTION_CHANGE_DEFAULT).apply {
+                putExtra(Telephony.Sms.Intents.EXTRA_PACKAGE_NAME, activity.packageName)
+            }
         }
     }
 
@@ -46,7 +47,19 @@ object PermissionAndRoleHelper {
         }
     }
 
+    fun hasUsageAccess(context: Context): Boolean {
+        val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
+        } else {
+            @Suppress("DEPRECATION")
+            appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName)
+        }
+        return mode == AppOpsManager.MODE_ALLOWED
+    }
+
     fun openUsageAccessSettings(activity: Activity) {
+        if (hasUsageAccess(activity)) return
         val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
         activity.startActivity(intent)
     }

@@ -3,7 +3,6 @@
     <string name="app_name">RemoteMessage Gateway</string>
     <string name="hint_server_base_url">Server Base URL</string>
     <string name="hint_device_id">Device ID</string>
-    <string name="hint_sim_sub_id">SIM Subscription ID (optional)</string>
     <string name="hint_sim1_phone">SIM 1 custom phone number (optional)</string>
     <string name="hint_sim2_phone">SIM 2 custom phone number (optional)</string>
     <string name="hint_api_key">Password (legacy label)</string>
@@ -30,6 +29,7 @@
     <string name="status_cert_import_failed">Certificate import failed: %1$s</string>
     <string name="status_sms_role_requested">SMS role request sent. Please approve it in the system dialog.</string>
     <string name="status_sms_role_held">This app is already the default SMS app.</string>
+    <string name="status_sms_role_unavailable">Unable to open the default SMS role dialog on this device.</string>
     <string name="status_history_sync_preparing">Preparing history sync…</string>
     <string name="status_history_sync_progress">History sync progress: %1$d/%2$d</string>
     <string name="status_sim_info_empty">SIM info not loaded yet</string>

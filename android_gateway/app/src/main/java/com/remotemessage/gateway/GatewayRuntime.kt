@@ -35,8 +35,7 @@ import kotlin.concurrent.thread
 
 data class GatewayConfig(
     val serverBaseUrl: String,
-    val deviceId: String,
-    val simSubId: Int? = null
+    val deviceId: String
 )
 
 data class LocalSmsStats(
@@ -150,11 +149,9 @@ object GatewayRuntime {
             val preferredSimSlotIndex = payload.optNullableInt("simSlotIndex")
             val resolvedSim = GatewaySimSupport.resolveForSlotIndex(
                 snapshot = GatewaySimSupport.readSnapshot(context),
-                slotIndex = preferredSimSlotIndex,
-                fallbackSubId = cfg.simSubId
+                slotIndex = preferredSimSlotIndex
             )
-            val smsManager = smsManagerForSubscriptionId(resolvedSim.subscriptionId ?: cfg.simSubId)
-            smsManager.sendTextMessage(phone, null, text, null, null)
+            sendTextMessageCompat(smsManagerForSubscriptionId(resolvedSim.subscriptionId), phone, text)
             flushPendingUploads(context, cfg)
             return "SMS sent to $phone"
         }
@@ -279,7 +276,7 @@ object GatewayRuntime {
                             subscriptionIdIdx >= 0 && !it.isNull(subscriptionIdIdx) -> it.getInt(subscriptionIdIdx)
                             else -> null
                         }
-                        val simInfo = GatewaySimSupport.resolveForSubscriptionId(simSnapshot, subscriptionId, cfg.simSubId)
+                        val simInfo = GatewaySimSupport.resolveForSubscriptionId(simSnapshot, subscriptionId)
                         val direction = if (type == Telephony.Sms.MESSAGE_TYPE_SENT) "outbound" else "inbound"
                         batch += PendingUploadInput(
                             phone = phone,
@@ -514,6 +511,15 @@ object GatewayRuntime {
             null -> SmsManager.getDefault()
             SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
             else -> SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
+        }
+    }
+
+    private fun sendTextMessageCompat(smsManager: SmsManager, phone: String, text: String) {
+        val parts = smsManager.divideMessage(text)
+        if (parts.size <= 1) {
+            smsManager.sendTextMessage(phone, null, text, null, null)
+        } else {
+            smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
         }
     }
 

@@ -16,6 +16,7 @@ import android.widget.EditText
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.app.ActivityCompat
@@ -32,6 +33,14 @@ class MainActivity : ComponentActivity() {
     private var realtimeSyncRunnable: Runnable? = null
     private val syncAnimHandler = Handler(Looper.getMainLooper())
     private var syncAnimRunnable: Runnable? = null
+
+    private val requestSmsRoleLauncher = registerForActivityResult(StartActivityForResult()) {
+        statusTextView?.text = if (PermissionAndRoleHelper.isDefaultSmsApp(this)) {
+            getString(R.string.status_sms_role_held)
+        } else {
+            getString(R.string.status_sms_role_requested)
+        }
+    }
 
     @Volatile
     private var realtimeSyncBusy = false
@@ -59,7 +68,6 @@ class MainActivity : ComponentActivity() {
         pref = getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
         val editServer = findViewById<EditText>(R.id.editServer)
         val editDeviceId = findViewById<EditText>(R.id.editDeviceId)
-        val editSimSubId = findViewById<EditText>(R.id.editSimSubId)
         val editSim1Phone = findViewById<EditText>(R.id.editSim1Phone)
         val editSim2Phone = findViewById<EditText>(R.id.editSim2Phone)
         val editApiKey = findViewById<EditText>(R.id.editApiKey)
@@ -80,7 +88,6 @@ class MainActivity : ComponentActivity() {
 
         editServer.setText(pref.getString("server_base", "https://10.0.2.2:5001") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
-        editSimSubId.setText(pref.getString("sim_sub_id", "") ?: "")
         editSim1Phone.setText(pref.getString("sim_custom_number_0", "") ?: "")
         editSim2Phone.setText(pref.getString("sim_custom_number_1", "") ?: "")
         editApiKey.setText(pref.getString("password", pref.getString("api_key", "")) ?: "")
@@ -90,12 +97,13 @@ class MainActivity : ComponentActivity() {
         RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
 
         requestPermissionsIfNeeded()
-        PermissionAndRoleHelper.requestDefaultSmsRole(this)
         PermissionAndRoleHelper.requestIgnoreBatteryOptimizations(this)
-        PermissionAndRoleHelper.openUsageAccessSettings(this)
+        if (!PermissionAndRoleHelper.hasUsageAccess(this)) {
+            PermissionAndRoleHelper.openUsageAccessSettings(this)
+        }
         GatewaySyncWorker.schedule(this)
-        startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, editWebUiPort, textStatus)
-        startRealtimeSyncLoop(editServer, editDeviceId, editSimSubId, editApiKey, textStatus)
+        startWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
+        startRealtimeSyncLoop(editServer, editDeviceId, editApiKey, textStatus)
 
         btnSave.setOnClickListener {
             val serverText = editServer.text.toString().trim()
@@ -122,7 +130,7 @@ class MainActivity : ComponentActivity() {
             pref.edit()
                 .putString("server_base", serverText)
                 .putString("device_id", deviceIdText)
-                .putString("sim_sub_id", editSimSubId.text.toString().trim())
+                .remove("sim_sub_id")
                 .putString("sim_custom_number_0", editSim1Phone.text.toString().trim())
                 .putString("sim_custom_number_1", editSim2Phone.text.toString().trim())
                 .putString("password", passwordText)
@@ -131,11 +139,10 @@ class MainActivity : ComponentActivity() {
             RuntimeConfig.password = passwordText
             val cfg = GatewayConfig(
                 serverBaseUrl = serverText,
-                deviceId = deviceIdText,
-                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                deviceId = deviceIdText
             )
             GatewaySyncWorker.schedule(this)
-            restartWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, editWebUiPort, textStatus)
+            restartWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
             textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
             textStatus.text = getString(R.string.status_saved_auto_sync)
             GatewayRuntime.pushSimState(this, cfg) {
@@ -149,8 +156,7 @@ class MainActivity : ComponentActivity() {
             showProgress(indeterminate = true)
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
-                deviceId = editDeviceId.text.toString().trim(),
-                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                deviceId = editDeviceId.text.toString().trim()
             )
             GatewayRuntime.registerGateway(this, cfg) {
                 runOnUiThread {
@@ -166,8 +172,7 @@ class MainActivity : ComponentActivity() {
             showProgress(indeterminate = true)
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
-                deviceId = editDeviceId.text.toString().trim(),
-                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                deviceId = editDeviceId.text.toString().trim()
             )
             GatewayRuntime.pollAndSend(this, cfg) {
                 runOnUiThread {
@@ -182,8 +187,7 @@ class MainActivity : ComponentActivity() {
             textStatus.text = getString(R.string.status_history_sync_preparing)
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
-                deviceId = editDeviceId.text.toString().trim(),
-                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                deviceId = editDeviceId.text.toString().trim()
             )
             GatewayRuntime.syncHistoricalSms(this, cfg, onProgress = { processed, total ->
                 runOnUiThread {
@@ -218,8 +222,7 @@ class MainActivity : ComponentActivity() {
             showProgress(indeterminate = true)
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
-                deviceId = editDeviceId.text.toString().trim(),
-                simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                deviceId = editDeviceId.text.toString().trim()
             )
             Thread {
                 GatewayRuntime.flushPendingUploads(this, cfg)
@@ -235,11 +238,16 @@ class MainActivity : ComponentActivity() {
         }
 
         btnRequestSmsRole.setOnClickListener {
-            PermissionAndRoleHelper.requestDefaultSmsRole(this)
-            textStatus.text = if (PermissionAndRoleHelper.isDefaultSmsApp(this)) {
-                getString(R.string.status_sms_role_held)
+            val intent = PermissionAndRoleHelper.buildRequestDefaultSmsRoleIntent(this)
+            if (intent != null) {
+                requestSmsRoleLauncher.launch(intent)
+                textStatus.text = getString(R.string.status_sms_role_requested)
             } else {
-                getString(R.string.status_sms_role_requested)
+                textStatus.text = if (PermissionAndRoleHelper.isDefaultSmsApp(this)) {
+                    getString(R.string.status_sms_role_held)
+                } else {
+                    getString(R.string.status_sms_role_unavailable)
+                }
             }
         }
     }
@@ -247,7 +255,6 @@ class MainActivity : ComponentActivity() {
     private fun startWebUiServer(
         editServer: EditText,
         editDeviceId: EditText,
-        editSimSubId: EditText,
         editApiKey: EditText,
         editWebUiPort: EditText,
         textStatus: TextView
@@ -260,16 +267,14 @@ class MainActivity : ComponentActivity() {
             readConfig = {
                 GatewayConfig(
                     serverBaseUrl = editServer.text.toString().trim(),
-                    deviceId = editDeviceId.text.toString().trim(),
-                    simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                    deviceId = editDeviceId.text.toString().trim()
                 )
             },
             onAction = { action ->
                 RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
                 val cfg = GatewayConfig(
                     serverBaseUrl = editServer.text.toString().trim(),
-                    deviceId = editDeviceId.text.toString().trim(),
-                    simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                    deviceId = editDeviceId.text.toString().trim()
                 )
                 when (action) {
                     "register" -> {
@@ -314,20 +319,18 @@ class MainActivity : ComponentActivity() {
     private fun restartWebUiServer(
         editServer: EditText,
         editDeviceId: EditText,
-        editSimSubId: EditText,
         editApiKey: EditText,
         editWebUiPort: EditText,
         textStatus: TextView
     ) {
         webUiServer?.stop()
         webUiServer = null
-        startWebUiServer(editServer, editDeviceId, editSimSubId, editApiKey, editWebUiPort, textStatus)
+        startWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
     }
 
     private fun startRealtimeSyncLoop(
         editServer: EditText,
         editDeviceId: EditText,
-        editSimSubId: EditText,
         editApiKey: EditText,
         textStatus: TextView
     ) {
@@ -338,8 +341,7 @@ class MainActivity : ComponentActivity() {
                 if (!realtimeSyncBusy && !isFinishing && !isDestroyed) {
                     val cfg = GatewayConfig(
                         serverBaseUrl = editServer.text.toString().trim(),
-                        deviceId = editDeviceId.text.toString().trim(),
-                        simSubId = editSimSubId.text.toString().trim().toIntOrNull()
+                        deviceId = editDeviceId.text.toString().trim()
                     )
                     RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
 
@@ -347,6 +349,7 @@ class MainActivity : ComponentActivity() {
                         realtimeSyncBusy = true
                         Thread {
                             runCatching {
+                                GatewayRuntime.pushSimStateSync(this@MainActivity, cfg)
                                 GatewayRuntime.flushPendingUploads(this@MainActivity, cfg)
                                 GatewayRuntime.pollAndSendSync(this@MainActivity, cfg)
                             }.onSuccess { result ->
