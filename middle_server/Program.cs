@@ -312,6 +312,25 @@ app.MapPost("/api/gateway/outbound-status", (OutboundStatusUpdateRequest req, Sq
     return Results.Ok(new { ok = true, updated });
 });
 
+app.MapPost("/api/admin/clear-server-data", (ClearServerDataRequest req, SqliteRepository repo, ILogger<Program> logger) =>
+{
+    if (ValidateClearServerDataRequest(req) is { } error)
+    {
+        return error;
+    }
+
+    var result = repo.ClearServerData();
+    logger.LogWarning(
+        "Server data cleared via admin API. Messages={MessagesCleared}, Outbox={OutboxCleared}, Pinned={PinnedConversationsCleared}, SimProfiles={GatewaySimProfilesCleared}, ApiLogs={ApiLogsCleared}",
+        result.MessagesCleared,
+        result.OutboxCleared,
+        result.PinnedConversationsCleared,
+        result.GatewaySimProfilesCleared,
+        result.ApiLogsCleared
+    );
+    return Results.Ok(new { ok = true, result });
+});
+
 app.Run();
 
 static string NormalizeDirection(string? direction)
@@ -639,6 +658,13 @@ static IResult? ValidateOutboundStatusRequest(OutboundStatusUpdateRequest req)
     }
 
     return null;
+}
+
+static IResult? ValidateClearServerDataRequest(ClearServerDataRequest req)
+{
+    return string.Equals(req.Confirm?.Trim(), "CLEAR_SERVER_DATA", StringComparison.Ordinal)
+        ? null
+        : Results.BadRequest("confirm invalid");
 }
 
 static bool IsValidPhone(string? phone)
@@ -1353,6 +1379,27 @@ VALUES(
         return affected > 0;
     }
 
+    public ServerDataClearResult ClearServerData()
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+
+        var messagesCleared = DeleteAllFrom(conn, tx, "messages");
+        var outboxCleared = DeleteAllFrom(conn, tx, "outbox");
+        var pinnedConversationsCleared = DeleteAllFrom(conn, tx, "pinned_conversations");
+        var gatewaySimProfilesCleared = DeleteAllFrom(conn, tx, "gateway_sim_profiles");
+        var apiLogsCleared = DeleteAllFrom(conn, tx, "api_logs");
+
+        tx.Commit();
+        return new ServerDataClearResult(
+            MessagesCleared: messagesCleared,
+            OutboxCleared: outboxCleared,
+            PinnedConversationsCleared: pinnedConversationsCleared,
+            GatewaySimProfilesCleared: gatewaySimProfilesCleared,
+            ApiLogsCleared: apiLogsCleared
+        );
+    }
+
     private SqliteConnection Open()
     {
         var conn = OpenRaw();
@@ -1474,6 +1521,14 @@ CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
         }
     }
 
+    private int DeleteAllFrom(SqliteConnection conn, SqliteTransaction tx, string tableName)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = $"DELETE FROM {tableName};";
+        return cmd.ExecuteNonQuery();
+    }
+
     private string? NormalizeProfileText(string? value, int maxLength)
     {
         var normalized = value?.Trim();
@@ -1528,6 +1583,14 @@ public record OutboundStatusUpdateRequest(
 );
 public record UpsertGatewaySimStateRequest(string DeviceId, IReadOnlyList<GatewaySimProfilePayload> Profiles);
 public record GatewaySimProfilePayload(int SlotIndex, int? SubscriptionId = null, string? DisplayName = null, string? PhoneNumber = null, int? SimCount = null);
+public record ClearServerDataRequest(string? Confirm);
+public record ServerDataClearResult(
+    int MessagesCleared,
+    int OutboxCleared,
+    int PinnedConversationsCleared,
+    int GatewaySimProfilesCleared,
+    int ApiLogsCleared
+);
 
 public record GatewaySmsPayload(
     string Phone,

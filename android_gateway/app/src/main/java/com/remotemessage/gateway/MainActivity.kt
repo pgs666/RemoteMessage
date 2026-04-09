@@ -94,6 +94,7 @@ class MainActivity : ComponentActivity() {
         val btnRequestSmsRole = findViewById<Button>(R.id.btnRequestSmsRole)
         val btnClearLog = findViewById<Button>(R.id.btnClearLog)
         val btnClearDatabase = findViewById<Button>(R.id.btnClearDatabase)
+        val btnClearServerDatabase = findViewById<Button>(R.id.btnClearServerDatabase)
         statusTextView = textStatus
         debugLogTextView = textDebugLog
         syncProgressBar = progressSync
@@ -284,6 +285,33 @@ class MainActivity : ComponentActivity() {
                         textStatus.text = getString(R.string.status_database_cleared)
                     }.onFailure {
                         textStatus.text = getString(R.string.status_database_clear_failed, it.message ?: "unknown")
+                    }
+                }
+                .show()
+        }
+
+        btnClearServerDatabase.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.title_confirm_clear_server_database))
+                .setMessage(getString(R.string.message_confirm_clear_server_database))
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(android.R.string.ok) { _, _ ->
+                    showProgress(indeterminate = true)
+                    RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
+                    val cfg = GatewayConfig(
+                        serverBaseUrl = editServer.text.toString().trim(),
+                        deviceId = editDeviceId.text.toString().trim()
+                    )
+                    GatewayRuntime.clearServerData(this, cfg) { result ->
+                        runOnUiThread {
+                            hideProgress()
+                            if (result.startsWith("Clear server data error:")) {
+                                val reason = result.removePrefix("Clear server data error: ").ifBlank { "unknown" }
+                                textStatus.text = getString(R.string.status_server_database_clear_failed, reason)
+                            } else {
+                                textStatus.text = getString(R.string.status_server_database_cleared, result)
+                            }
+                        }
                     }
                 }
                 .show()

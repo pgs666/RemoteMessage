@@ -514,6 +514,57 @@ object GatewayRuntime {
         }
     }
 
+    fun clearServerData(context: Context, cfg: GatewayConfig, callback: (String) -> Unit) {
+        thread {
+            runCatching {
+                callback(clearServerDataSync(context, cfg))
+            }.onFailure {
+                callback("Clear server data error: ${it.message}")
+            }
+        }
+    }
+
+    fun clearServerDataSync(context: Context, cfg: GatewayConfig): String {
+        val requestJson = JSONObject()
+            .put("confirm", "CLEAR_SERVER_DATA")
+        val req = Request.Builder()
+            .url("${cfg.serverBaseUrl}/api/admin/clear-server-data")
+            .post(requestJson.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+
+        httpClient(context, cfg).newCall(req).execute().use { resp ->
+            val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: "{}"
+            if (!resp.isSuccessful) {
+                GatewayDebugLog.add(context, "Clear server data failed: ${resp.code} $body")
+                error("clear-server-data failed: ${resp.code} $body")
+            }
+
+            val result = runCatching { JSONObject(body).optJSONObject("result") }.getOrNull()
+            val messagesCleared = result?.optInt("messagesCleared", -1) ?: -1
+            val outboxCleared = result?.optInt("outboxCleared", -1) ?: -1
+            val pinnedCleared = result?.optInt("pinnedConversationsCleared", -1) ?: -1
+            val simProfilesCleared = result?.optInt("gatewaySimProfilesCleared", -1) ?: -1
+            val apiLogsCleared = result?.optInt("apiLogsCleared", -1) ?: -1
+
+            GatewayDebugLog.add(
+                context,
+                "Clear server data success: messages=$messagesCleared, outbox=$outboxCleared, pinned=$pinnedCleared, simProfiles=$simProfilesCleared, apiLogs=$apiLogsCleared"
+            )
+
+            runCatching {
+                pushSimStateSync(context, cfg)
+            }.onFailure {
+                GatewayDebugLog.add(context, "Push SIM state after server clear failed: ${it.debugSummary()}")
+            }
+
+            return if (messagesCleared >= 0 && outboxCleared >= 0) {
+                "Server data cleared: messages=$messagesCleared, outbox=$outboxCleared"
+            } else {
+                "Server data cleared"
+            }
+        }
+    }
+
     fun pushSimStateSync(context: Context, cfg: GatewayConfig): String {
         val snapshot = GatewaySimSupport.readSnapshot(context)
         GatewayDebugLog.add(context, "Push SIM state: count=${snapshot.profiles.size}")
