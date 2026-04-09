@@ -490,7 +490,7 @@ jobs:
             printf "platform :ios, '15.0'\n%s" "$(cat "$podfile")" > "$podfile"
           fi
 
-          sed -i "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]\\+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g" "$pbxproj"
+          perl -0777 -i -pe "s/IPHONEOS_DEPLOYMENT_TARGET = [0-9.]+;/IPHONEOS_DEPLOYMENT_TARGET = 15.0;/g" "$pbxproj"
           /usr/libexec/PlistBuddy -c "Set :MinimumOSVersion 15.0" "$appframework_plist" || true
 
       - name: Build iOS (no codesign)
