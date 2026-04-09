@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rid: [linux-x64, linux-arm64]
+        rid: [linux-x64, linux-arm64, windows-x64, windows-arm64]
 
     steps:
       - name: Checkout
@@ -38,6 +38,35 @@ jobs:
           /p:PublishTrimmed=false
           /p:DebugType=embedded
           -o artifacts/middle-server/${{ matrix.rid }}
+
+      - name: Normalize single-file output (${{ matrix.rid }})
+        shell: bash
+        run: |
+          set -euo pipefail
+          out_dir="artifacts/middle-server/${{ matrix.rid }}"
+
+          if [[ "${{ matrix.rid }}" == windows-* ]]; then
+            source_file="$out_dir/RemoteMessage.MiddleServer.exe"
+            target_file="$out_dir/RemoteMessageServer-${{ matrix.rid }}.exe"
+          else
+            source_file="$out_dir/RemoteMessage.MiddleServer"
+            target_file="$out_dir/RemoteMessageServer-${{ matrix.rid }}"
+          fi
+
+          if [[ ! -f "$source_file" ]]; then
+            echo "::error::Expected publish binary not found: $source_file"
+            ls -la "$out_dir"
+            exit 1
+          fi
+
+          mv "$source_file" "$target_file"
+
+          shopt -s dotglob nullglob
+          for item in "$out_dir"/*; do
+            if [[ "$item" != "$target_file" ]]; then
+              rm -rf "$item"
+            fi
+          done
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
