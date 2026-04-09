@@ -139,23 +139,23 @@ jobs:
           mkdir -p "$appdir"
           cp -R "$bundle_dir"/. "$appdir"/
 
-          cat > "$appdir/AppRun" <<EOF
-#!/bin/sh
-HERE="\$(dirname \"\$(readlink -f \"\$0\")\")"
-exec "\$HERE/$exec_name" "\$@"
-EOF
+          printf '%s\n' \
+            '#!/bin/sh' \
+            'HERE="$(dirname "$(readlink -f "$0")")"' \
+            "exec \"\$HERE/$exec_name\" \"\$@\"" \
+            > "$appdir/AppRun"
           chmod +x "$appdir/AppRun"
 
-          cat > "$appdir/remotemessage.desktop" <<EOF
-[Desktop Entry]
-Type=Application
-Name=RemoteMessage
-Comment=RemoteMessage desktop client
-Exec=$exec_name
-Icon=remotemessage
-Categories=Network;
-Terminal=false
-EOF
+          printf '%s\n' \
+            '[Desktop Entry]' \
+            'Type=Application' \
+            'Name=RemoteMessage' \
+            'Comment=RemoteMessage desktop client' \
+            "Exec=$exec_name" \
+            'Icon=remotemessage' \
+            'Categories=Network;' \
+            'Terminal=false' \
+            > "$appdir/remotemessage.desktop"
 
           cp client/icons/Icon12-iOS-Default-1024x1024@1x.png "$appdir/remotemessage.png"
 
@@ -225,31 +225,34 @@ EOF
           Move-Item -Path $zipAsset -Destination "release-assets/windows/$zipAsset" -Force
 
           $issPath = "client/flutter_client_build/windows_installer.iss"
-          @"
-[Setup]
-AppId={{A0FA4589-21AF-4EC3-9A9D-EEAEF77F013E}}
-AppName=RemoteMessage
-AppVersion=$versionName
-DefaultDirName={autopf}\\RemoteMessageClient
-DefaultGroupName=RemoteMessage
-OutputDir=$(Resolve-Path release-assets/windows)
-OutputBaseFilename=RemoteMessageClient-windows-x64-setup-$versionName-$versionCode
-Compression=lzma
-SolidCompression=yes
-ArchitecturesAllowed=x64compatible
-ArchitecturesInstallIn64BitMode=x64compatible
-WizardStyle=modern
-
-[Tasks]
-Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Additional icons:"
-
-[Files]
-Source: "$(Resolve-Path client/flutter_client_build/build/windows/x64/runner/Release)\\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-
-[Icons]
-Name: "{autoprograms}\\RemoteMessage"; Filename: "{app}\\remotemessage.exe"
-Name: "{autodesktop}\\RemoteMessage"; Filename: "{app}\\remotemessage.exe"; Tasks: desktopicon
-"@ | Set-Content -Path $issPath -Encoding UTF8
+          $releaseDir = Resolve-Path client/flutter_client_build/build/windows/x64/runner/Release
+          $outputDir = Resolve-Path release-assets/windows
+          $issLines = @(
+            "[Setup]"
+            "AppId={{A0FA4589-21AF-4EC3-9A9D-EEAEF77F013E}}"
+            "AppName=RemoteMessage"
+            "AppVersion=$versionName"
+            "DefaultDirName={autopf}\\RemoteMessageClient"
+            "DefaultGroupName=RemoteMessage"
+            "OutputDir=$outputDir"
+            "OutputBaseFilename=RemoteMessageClient-windows-x64-setup-$versionName-$versionCode"
+            "Compression=lzma"
+            "SolidCompression=yes"
+            "ArchitecturesAllowed=x64compatible"
+            "ArchitecturesInstallIn64BitMode=x64compatible"
+            "WizardStyle=modern"
+            ""
+            "[Tasks]"
+            "Name: ""desktopicon""; Description: ""Create a desktop shortcut""; GroupDescription: ""Additional icons:"""
+            ""
+            "[Files]"
+            "Source: ""$releaseDir\\*""; DestDir: ""{app}""; Flags: ignoreversion recursesubdirs createallsubdirs"
+            ""
+            "[Icons]"
+            "Name: ""{autoprograms}\\RemoteMessage""; Filename: ""{app}\\remotemessage.exe"""
+            "Name: ""{autodesktop}\\RemoteMessage""; Filename: ""{app}\\remotemessage.exe""; Tasks: desktopicon"
+          )
+          $issLines | Set-Content -Path $issPath -Encoding UTF8
 
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" $issPath
 
