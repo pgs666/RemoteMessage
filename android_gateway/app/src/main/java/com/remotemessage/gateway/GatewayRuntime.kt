@@ -30,7 +30,7 @@ import java.security.interfaces.RSAKey
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.security.cert.CertificateFactory
-import java.util.Base64
+import android.util.Base64
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
 import javax.net.ssl.SSLContext
@@ -1288,13 +1288,13 @@ object GatewayRuntime {
     private fun encryptChunk(key: PublicKey, plainBytes: ByteArray): String {
         val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
         cipher.init(Cipher.ENCRYPT_MODE, key)
-        return Base64.getEncoder().encodeToString(cipher.doFinal(plainBytes))
+        return Base64.encodeToString(cipher.doFinal(plainBytes), Base64.NO_WRAP)
     }
 
     private fun decryptChunk(key: PrivateKey, encryptedBase64: String): ByteArray {
         val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
         cipher.init(Cipher.DECRYPT_MODE, key)
-        return cipher.doFinal(Base64.getDecoder().decode(encryptedBase64))
+        return cipher.doFinal(Base64.decode(encryptedBase64, Base64.NO_WRAP))
     }
 
     private fun maxOaepSha256PlaintextSize(key: PublicKey): Int {
@@ -1311,7 +1311,7 @@ object GatewayRuntime {
     }
 
     private fun loadPublicKey(publicPem: String): PublicKey {
-        val bytes = Base64.getMimeDecoder().decode(publicPem.pemBody())
+        val bytes = Base64.decode(publicPem.pemBody(), Base64.NO_WRAP)
         val keyFactory = rawRsaKeyFactory()
         return runCatching {
             keyFactory.generatePublic(X509EncodedKeySpec(bytes))
@@ -1321,7 +1321,7 @@ object GatewayRuntime {
     }
 
     private fun loadPrivateKey(privatePem: String): PrivateKey {
-        val bytes = Base64.getDecoder().decode(privatePem.pemBody())
+        val bytes = Base64.decode(privatePem.pemBody(), Base64.NO_WRAP)
         val spec = PKCS8EncodedKeySpec(bytes)
         return rawRsaKeyFactory().generatePrivate(spec)
     }
@@ -1346,8 +1346,27 @@ object GatewayRuntime {
     }
 
     private fun toPem(title: String, raw: ByteArray): String {
-        val b64 = Base64.getMimeEncoder(64, "\n".toByteArray()).encodeToString(raw)
-        return "-----BEGIN $title-----\n$b64\n-----END $title-----"
+        val b64 = Base64.encodeToString(raw, Base64.NO_WRAP)
+        val wrapped = wrapPemBase64Body(b64)
+        return "-----BEGIN $title-----\n$wrapped\n-----END $title-----"
+    }
+
+    private fun wrapPemBase64Body(base64Text: String): String {
+        if (base64Text.isEmpty()) {
+            return base64Text
+        }
+
+        val out = StringBuilder(base64Text.length + (base64Text.length / 64) + 8)
+        var offset = 0
+        while (offset < base64Text.length) {
+            val end = minOf(offset + 64, base64Text.length)
+            out.append(base64Text, offset, end)
+            if (end < base64Text.length) {
+                out.append('\n')
+            }
+            offset = end
+        }
+        return out.toString()
     }
 
     private fun String.pemBody(): String {
