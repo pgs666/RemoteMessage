@@ -762,7 +762,7 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                           ],
                           const SizedBox(height: 4),
                           Text(
-                            DateTime.fromMillisecondsSinceEpoch(m.timestamp).toLocal().toString(),
+                            _formatMessageTimestamp(m.timestamp),
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ],
@@ -889,6 +889,12 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
       return '$statusText ($detail)';
     }
     return statusText;
+  }
+
+  String _formatMessageTimestamp(int timestampMs) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(timestampMs).toLocal();
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
   }
 
   @override

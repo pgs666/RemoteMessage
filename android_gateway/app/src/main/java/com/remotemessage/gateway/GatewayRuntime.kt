@@ -29,7 +29,9 @@ import java.security.Security
 import java.security.interfaces.RSAKey
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
+import java.security.cert.CertificateException
 import java.security.cert.CertificateFactory
+import java.security.cert.X509Certificate
 import android.util.Base64
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
@@ -1168,28 +1170,11 @@ object GatewayRuntime {
                     chain.proceed(req.build())
                 })
 
-            if (cfg.serverBaseUrl.startsWith("https://", ignoreCase = true) && !GatewayCertificateStore.hasCertificate(context)) {
-                error("HTTPS requires an imported server certificate")
-            }
-
-            if (cfg.serverBaseUrl.startsWith("https://", ignoreCase = true) && GatewayCertificateStore.hasCertificate(context)) {
-                val cf = CertificateFactory.getInstance("X.509")
-                GatewayCertificateStore.openInputStream(context).use { input ->
-                    if (input != null) {
-                        val ca = cf.generateCertificate(input)
-                        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
-                        keyStore.load(null, null)
-                        keyStore.setCertificateEntry("server", ca)
-
-                        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
-                        tmf.init(keyStore)
-                        val trustManager = tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
-
-                        val sslContext = SSLContext.getInstance("TLS")
-                        sslContext.init(null, arrayOf(trustManager), null)
-                        builder.sslSocketFactory(sslContext.socketFactory, trustManager)
-                    }
-                }
+            if (cfg.serverBaseUrl.startsWith("https://", ignoreCase = true)) {
+                val trustManager = buildServerTrustManager(context)
+                val sslContext = SSLContext.getInstance("TLS")
+                sslContext.init(null, arrayOf(trustManager), null)
+                builder.sslSocketFactory(sslContext.socketFactory, trustManager)
             }
 
             return builder.build().also {
@@ -1197,6 +1182,86 @@ object GatewayRuntime {
                 cachedHttpClientBaseUrl = cfg.serverBaseUrl
                 cachedHttpClientCertStamp = certStamp
             }
+        }
+    }
+
+    private fun buildServerTrustManager(context: Context): X509TrustManager {
+        val systemTrust = systemTrustManager()
+        val importedTrust = runCatching { importedCertificateTrustManager(context) }
+            .onFailure { err ->
+                GatewayDebugLog.add(
+                    context,
+                    "Ignored imported cert and fallback to system trust: ${err.message ?: "unknown"}"
+                )
+            }
+            .getOrNull()
+
+        return if (importedTrust == null) {
+            systemTrust
+        } else {
+            CompositeX509TrustManager(listOf(importedTrust, systemTrust))
+        }
+    }
+
+    private fun systemTrustManager(): X509TrustManager {
+        val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+        tmf.init(null as KeyStore?)
+        return tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
+    }
+
+    private fun importedCertificateTrustManager(context: Context): X509TrustManager? {
+        if (!GatewayCertificateStore.hasCertificate(context)) return null
+        val cf = CertificateFactory.getInstance("X.509")
+        GatewayCertificateStore.openInputStream(context).use { input ->
+            val stream = input ?: return null
+            val ca = cf.generateCertificate(stream)
+            val keyStore = KeyStore.getInstance(KeyStore.getDefaultType())
+            keyStore.load(null, null)
+            keyStore.setCertificateEntry("server", ca)
+
+            val tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm())
+            tmf.init(keyStore)
+            return tmf.trustManagers.first { it is X509TrustManager } as X509TrustManager
+        }
+    }
+
+    private class CompositeX509TrustManager(
+        private val delegates: List<X509TrustManager>
+    ) : X509TrustManager {
+        override fun checkClientTrusted(chain: Array<X509Certificate>, authType: String) {
+            checkAnyTrusted(chain, authType) { trustManager, certChain, type ->
+                trustManager.checkClientTrusted(certChain, type)
+            }
+        }
+
+        override fun checkServerTrusted(chain: Array<X509Certificate>, authType: String) {
+            checkAnyTrusted(chain, authType) { trustManager, certChain, type ->
+                trustManager.checkServerTrusted(certChain, type)
+            }
+        }
+
+        override fun getAcceptedIssuers(): Array<X509Certificate> {
+            return delegates
+                .flatMap { it.acceptedIssuers.asList() }
+                .distinctBy { "${it.subjectX500Principal.name}|${it.serialNumber}" }
+                .toTypedArray()
+        }
+
+        private fun checkAnyTrusted(
+            chain: Array<X509Certificate>,
+            authType: String,
+            checker: (X509TrustManager, Array<X509Certificate>, String) -> Unit
+        ) {
+            var lastError: CertificateException? = null
+            delegates.forEach { trustManager ->
+                try {
+                    checker(trustManager, chain, authType)
+                    return
+                } catch (e: CertificateException) {
+                    lastError = e
+                }
+            }
+            throw lastError ?: CertificateException("No trust manager accepted the certificate chain")
         }
     }
 

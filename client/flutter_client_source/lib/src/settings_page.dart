@@ -201,8 +201,11 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     setState(() {
       _certStatus = exists
-          ? tr('已导入服务器证书（HTTPS 仅信任该证书）', 'Server certificate imported (HTTPS trusts only this cert).')
-          : tr('未导入服务器证书。使用 HTTPS 前请先导入 server-cert.cer', 'No server certificate imported. Import server-cert.cer before using HTTPS.');
+          ? tr('已导入服务器证书（在系统信任基础上追加信任）', 'Server certificate imported (added on top of system CAs).')
+          : tr(
+              '未导入服务器证书。HTTPS 默认信任公开 CA 证书；如使用自签证书请导入 server-cert.cer',
+              'No custom certificate imported. HTTPS trusts public CAs by default; import server-cert.cer only for self-signed servers.',
+            );
     });
   }
 

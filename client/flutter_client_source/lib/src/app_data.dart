@@ -381,18 +381,12 @@ class AppSettingsStore {
       return HttpClient();
     }
 
+    final context = SecurityContext(withTrustedRoots: true);
     final file = await trustedCertificateFile();
-    if (!await file.exists()) {
-      throw Exception(
-        isZh
-            ? '当前是 HTTPS 连接，请先在设置中导入 server-cert.cer'
-            : 'HTTPS is enabled. Please import server-cert.cer in Settings first.',
-      );
+    if (await file.exists()) {
+      final bytes = await file.readAsBytes();
+      context.setTrustedCertificatesBytes(bytes);
     }
-
-    final bytes = await file.readAsBytes();
-    final context = SecurityContext(withTrustedRoots: false);
-    context.setTrustedCertificatesBytes(bytes);
     return HttpClient(context: context);
   }
 
