@@ -24,12 +24,23 @@ class GatewaySyncWorker(
         if (server.isBlank() || deviceId.isBlank()) return Result.success()
 
         val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId)
-        return runCatching {
+        runCatching {
             GatewayRuntime.pushSimStateSync(applicationContext, cfg)
+        }.onFailure {
+            GatewayDebugLog.add(applicationContext, "Worker step failed: pushSimStateSync: ${it.message}")
+        }
+
+        runCatching {
             GatewayRuntime.flushPendingUploads(applicationContext, cfg)
+        }.onFailure {
+            GatewayDebugLog.add(applicationContext, "Worker step failed: flushPendingUploads: ${it.message}")
+        }
+
+        return runCatching {
             GatewayRuntime.pollAndSendSync(applicationContext, cfg)
             Result.success()
         }.getOrElse {
+            GatewayDebugLog.add(applicationContext, "Worker step failed: pollAndSendSync: ${it.message}")
             Result.retry()
         }
     }

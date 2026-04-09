@@ -365,16 +365,31 @@ class MainActivity : ComponentActivity() {
                     if (cfg.serverBaseUrl.isNotBlank() && cfg.deviceId.isNotBlank()) {
                         realtimeSyncBusy = true
                         Thread {
-                            runCatching {
-                                GatewayRuntime.pushSimStateSync(this@MainActivity, cfg)
-                                GatewayRuntime.flushPendingUploads(this@MainActivity, cfg)
-                                GatewayRuntime.pollAndSendSync(this@MainActivity, cfg)
-                            }.onSuccess { result ->
-                                if (result != "No pending message") {
-                                    runOnUiThread { textStatus.text = result }
+                            try {
+                                runCatching {
+                                    GatewayRuntime.pushSimStateSync(this@MainActivity, cfg)
+                                }.onFailure {
+                                    GatewayDebugLog.add(this@MainActivity, "Realtime sync step failed: pushSimStateSync: ${it.message}")
                                 }
+
+                                runCatching {
+                                    GatewayRuntime.flushPendingUploads(this@MainActivity, cfg)
+                                }.onFailure {
+                                    GatewayDebugLog.add(this@MainActivity, "Realtime sync step failed: flushPendingUploads: ${it.message}")
+                                }
+
+                                runCatching {
+                                    GatewayRuntime.pollAndSendSync(this@MainActivity, cfg)
+                                }.onSuccess { result ->
+                                    if (result != "No pending message") {
+                                        runOnUiThread { textStatus.text = result }
+                                    }
+                                }.onFailure {
+                                    GatewayDebugLog.add(this@MainActivity, "Realtime sync step failed: pollAndSendSync: ${it.message}")
+                                }
+                            } finally {
+                                realtimeSyncBusy = false
                             }
-                            realtimeSyncBusy = false
                         }.start()
                     }
                 }

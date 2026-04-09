@@ -4,6 +4,7 @@ import android.content.Context
 import java.io.ByteArrayOutputStream
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
+import android.net.Uri
 import android.provider.Telephony
 import android.telephony.SubscriptionManager
 import android.telephony.SmsManager
@@ -130,7 +131,7 @@ object GatewayRuntime {
         GatewayDebugLog.add(context, "Poll start: ${cfg.deviceId}")
         val (_, privatePem) = getOrCreateKeyPairPem(context)
         val req = Request.Builder()
-            .url("${cfg.serverBaseUrl}/api/gateway/pull?deviceId=${cfg.deviceId}")
+            .url("${cfg.serverBaseUrl}/api/gateway/pull?deviceId=${Uri.encode(cfg.deviceId)}")
             .get()
             .build()
 
