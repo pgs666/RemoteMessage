@@ -219,7 +219,7 @@ LIMIT $limit;";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
-            var lastSeenAt = reader.IsDBNull(2) ? null : reader.GetInt64(2);
+            long? lastSeenAt = reader.IsDBNull(2) ? null : reader.GetInt64(2);
             var isOnline = lastSeenAt.HasValue && now - lastSeenAt.Value <= onlineWindowMs;
             list.Add(new GatewaySummaryRecord(
                 DeviceId: reader.GetString(0),
@@ -250,7 +250,7 @@ LIMIT $limit;";
             return null;
         }
 
-        var lastSeenAt = reader.IsDBNull(0) ? null : reader.GetInt64(0);
+        long? lastSeenAt = reader.IsDBNull(0) ? null : reader.GetInt64(0);
         var isOnline = lastSeenAt.HasValue && checkedAt - lastSeenAt.Value <= onlineWindowMs;
         return new GatewayOnlineStatusRecord(
             DeviceId: deviceId,
