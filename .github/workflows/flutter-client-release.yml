@@ -483,9 +483,9 @@ jobs:
           appframework_plist="client/flutter_client_build/ios/Flutter/AppFrameworkInfo.plist"
 
           if grep -qE '^platform :ios' "$podfile"; then
-            sed -i "s/^platform :ios.*/platform :ios, '15.0'/" "$podfile"
+            perl -i -pe "s/^platform :ios.*/platform :ios, '15.0'/" "$podfile"
           elif grep -qE '^# platform :ios' "$podfile"; then
-            sed -i "s/^# platform :ios.*/platform :ios, '15.0'/" "$podfile"
+            perl -i -pe "s/^# platform :ios.*/platform :ios, '15.0'/" "$podfile"
           else
             printf "platform :ios, '15.0'\n%s" "$(cat "$podfile")" > "$podfile"
           fi
