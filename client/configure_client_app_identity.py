@@ -289,6 +289,12 @@ def configure_windows(app_dir: Path) -> None:
         text = re.sub(r'CreateAndShow\(L"[^"]*"', f'CreateAndShow(L"{APP_NAME_EN}"', text)
         main_cpp.write_text(text, encoding="utf-8")
 
+    resources_h = app_dir / "windows" / "runner" / "resources.h"
+    if resources_h.exists():
+        text = resources_h.read_text(encoding="utf-8")
+        text = re.sub(r'#define\s+APP_NAME\s+"[^"]*"', f'#define APP_NAME "{APP_NAME_EN}"', text)
+        resources_h.write_text(text, encoding="utf-8")
+
     runner_rc = app_dir / "windows" / "runner" / "Runner.rc"
     if runner_rc.exists():
         text = runner_rc.read_text(encoding="utf-8")

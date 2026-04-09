@@ -25,7 +25,7 @@ jobs:
           sudo apt-get install -y ninja-build libgtk-3-dev
 
       - name: Create Flutter app skeleton
-        run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
+        run: flutter create --project-name remotemessage --platforms=android,ios,linux,windows client/flutter_client_build
 
       - name: Add client dependencies
         run: |
@@ -71,7 +71,7 @@ jobs:
           channel: stable
 
       - name: Create Flutter app skeleton
-        run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
+        run: flutter create --project-name remotemessage --platforms=android,ios,linux,windows client/flutter_client_build
 
       - name: Add client dependencies
         run: |
@@ -122,7 +122,7 @@ jobs:
           channel: stable
 
       - name: Create Flutter app skeleton
-        run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
+        run: flutter create --project-name remotemessage --platforms=android,ios,linux,windows client/flutter_client_build
 
       - name: Add client dependencies
         run: |
@@ -267,7 +267,7 @@ jobs:
           channel: stable
 
       - name: Create Flutter app skeleton
-        run: flutter create --platforms=android,ios,linux,windows client/flutter_client_build
+        run: flutter create --project-name remotemessage --platforms=android,ios,linux,windows client/flutter_client_build
 
       - name: Add client dependencies
         run: |
