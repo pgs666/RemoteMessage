@@ -238,10 +238,6 @@ app.MapPost("/api/client/send", (SendSmsRequest req, GatewayRegistry registry, S
 
     var outboundSimSlot = selectedSim?.SlotIndex ?? NormalizeSimSlotIndex(req.SimSlotIndex);
     var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-    var instruction = new OutboundInstruction(req.TargetPhone, req.Content, outboundSimSlot);
-    var plain = JsonSerializer.Serialize(instruction, jsonOptions);
-    var encrypted = EncryptByPublicKey(plain, pem);
-
     var outbound = new SmsPayload(
         Id: MessageIdentity.Build(req.DeviceId, req.TargetPhone, req.Content, now, "outbound", outboundSimSlot),
         DeviceId: req.DeviceId,
@@ -251,8 +247,13 @@ app.MapPost("/api/client/send", (SendSmsRequest req, GatewayRegistry registry, S
         Direction: "outbound",
         SimSlotIndex: outboundSimSlot,
         SimPhoneNumber: selectedSim?.PhoneNumber,
-        SimCount: selectedSim?.SimCount ?? gatewaySims.Select(x => (int?)x.SimCount).DefaultIfEmpty().Max()
+        SimCount: selectedSim?.SimCount ?? gatewaySims.Select(x => (int?)x.SimCount).DefaultIfEmpty().Max(),
+        SendStatus: "queued",
+        UpdatedAt: now
     );
+    var instruction = new OutboundInstruction(outbound.Id, req.TargetPhone, req.Content, outboundSimSlot);
+    var plain = JsonSerializer.Serialize(instruction, jsonOptions);
+    var encrypted = EncryptByPublicKey(plain, pem);
 
     repo.EnqueueOutbound(req.DeviceId, encrypted);
     repo.InsertMessageIfNotExists(outbound);
@@ -284,6 +285,33 @@ app.MapPost("/api/gateway/pull/ack", (AckOutboundRequest req, SqliteRepository r
         : Results.NotFound(new { ok = false, error = "pending outbound not found" });
 });
 
+app.MapPost("/api/gateway/outbound-status", (OutboundStatusUpdateRequest req, SqliteRepository repo) =>
+{
+    if (ValidateOutboundStatusRequest(req) is { } error)
+    {
+        return error;
+    }
+
+    var status = NormalizeSendStatus(req.Status);
+    if (status is null)
+    {
+        return Results.BadRequest("status invalid");
+    }
+
+    var normalized = req with
+    {
+        Status = status,
+        SimSlotIndex = NormalizeSimSlotIndex(req.SimSlotIndex),
+        SimPhoneNumber = NormalizeOptionalText(req.SimPhoneNumber, 64),
+        SimCount = NormalizeSimCount(req.SimCount),
+        ErrorMessage = NormalizeOptionalText(req.ErrorMessage, 512),
+        Timestamp = req.Timestamp > 0 ? req.Timestamp : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()
+    };
+
+    var updated = repo.UpsertOutboundStatus(normalized);
+    return Results.Ok(new { ok = true, updated });
+});
+
 app.Run();
 
 static string NormalizeDirection(string? direction)
@@ -300,6 +328,18 @@ static int? NormalizeSimSlotIndex(int? simSlotIndex)
 static int? NormalizeSimCount(int? simCount)
 {
     return simCount is >= 1 and <= 8 ? simCount : null;
+}
+
+static string? NormalizeSendStatus(string? status)
+{
+    return status?.Trim().ToLowerInvariant() switch
+    {
+        "queued" => "queued",
+        "dispatched" => "dispatched",
+        "sent" => "sent",
+        "failed" => "failed",
+        _ => null
+    };
 }
 
 static string? NormalizeOptionalText(string? value, int maxLength)
@@ -541,6 +581,61 @@ static IResult? ValidateAckOutboundRequest(AckOutboundRequest req)
     if (req.AckToken.Length > 128)
     {
         return Results.BadRequest("ackToken too long");
+    }
+
+    return null;
+}
+
+static IResult? ValidateOutboundStatusRequest(OutboundStatusUpdateRequest req)
+{
+    if (string.IsNullOrWhiteSpace(req.DeviceId) || string.IsNullOrWhiteSpace(req.MessageId) || !IsValidPhone(req.TargetPhone))
+    {
+        return Results.BadRequest("deviceId/messageId/targetPhone required");
+    }
+
+    if (req.DeviceId.Length > 128)
+    {
+        return Results.BadRequest("deviceId too long");
+    }
+
+    if (req.MessageId.Length > 256)
+    {
+        return Results.BadRequest("messageId too long");
+    }
+
+    if (string.IsNullOrWhiteSpace(req.Status))
+    {
+        return Results.BadRequest("status required");
+    }
+
+    if (NormalizeSendStatus(req.Status) is null)
+    {
+        return Results.BadRequest("status invalid");
+    }
+
+    if (req.SimSlotIndex.HasValue && req.SimSlotIndex.Value is < 0 or > 7)
+    {
+        return Results.BadRequest("simSlotIndex invalid");
+    }
+
+    if (!string.IsNullOrWhiteSpace(req.SimPhoneNumber) && !IsValidPhone(req.SimPhoneNumber))
+    {
+        return Results.BadRequest("simPhoneNumber invalid");
+    }
+
+    if (req.SimCount.HasValue && req.SimCount.Value is < 1 or > 8)
+    {
+        return Results.BadRequest("simCount invalid");
+    }
+
+    if (req.ErrorCode.HasValue && req.ErrorCode.Value is < -999999 or > 999999)
+    {
+        return Results.BadRequest("errorCode invalid");
+    }
+
+    if (!string.IsNullOrWhiteSpace(req.ErrorMessage) && req.ErrorMessage.Length > 512)
+    {
+        return Results.BadRequest("errorMessage too long");
     }
 
     return null;
@@ -880,8 +975,14 @@ public sealed class SqliteRepository
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-INSERT OR IGNORE INTO messages(id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count)
-VALUES($id,$deviceId,$phone,$content,$timestamp,$direction,$simSlotIndex,$simPhoneNumber,$simCount);";
+INSERT OR IGNORE INTO messages(
+    id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count,
+    send_status, send_error_code, send_error_message, updated_at
+)
+VALUES(
+    $id,$deviceId,$phone,$content,$timestamp,$direction,$simSlotIndex,$simPhoneNumber,$simCount,
+    $sendStatus,$sendErrorCode,$sendErrorMessage,$updatedAt
+);";
         cmd.Parameters.AddWithValue("$id", payload.Id);
         cmd.Parameters.AddWithValue("$deviceId", payload.DeviceId);
         cmd.Parameters.AddWithValue("$phone", payload.Phone);
@@ -891,6 +992,10 @@ VALUES($id,$deviceId,$phone,$content,$timestamp,$direction,$simSlotIndex,$simPho
         cmd.Parameters.AddWithValue("$simSlotIndex", (object?)payload.SimSlotIndex ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$simPhoneNumber", (object?)payload.SimPhoneNumber ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$simCount", (object?)payload.SimCount ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$sendStatus", (object?)NormalizeSendStatusText(payload.SendStatus) ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$sendErrorCode", (object?)payload.SendErrorCode ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$sendErrorMessage", (object?)payload.SendErrorMessage ?? DBNull.Value);
+        cmd.Parameters.AddWithValue("$updatedAt", payload.UpdatedAt ?? payload.Timestamp);
         return cmd.ExecuteNonQuery() > 0;
     }
 
@@ -903,7 +1008,7 @@ VALUES($id,$deviceId,$phone,$content,$timestamp,$direction,$simSlotIndex,$simPho
 
         if (sinceTs.HasValue)
         {
-            where.Add("timestamp >= $sinceTs");
+            where.Add("(timestamp >= $sinceTs OR updated_at >= $sinceTs)");
             cmd.Parameters.AddWithValue("$sinceTs", sinceTs.Value);
         }
 
@@ -914,7 +1019,9 @@ VALUES($id,$deviceId,$phone,$content,$timestamp,$direction,$simSlotIndex,$simPho
         }
 
         cmd.CommandText = $@"
-SELECT id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count
+SELECT
+    id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count,
+    send_status, send_error_code, send_error_message, updated_at
 FROM messages
 WHERE {string.Join(" AND ", where)}
 ORDER BY timestamp ASC
@@ -934,7 +1041,11 @@ LIMIT $limit;";
                 Direction: reader.GetString(5),
                 SimSlotIndex: reader.IsDBNull(6) ? null : reader.GetInt32(6),
                 SimPhoneNumber: reader.IsDBNull(7) ? null : reader.GetString(7),
-                SimCount: reader.IsDBNull(8) ? null : reader.GetInt32(8)
+                SimCount: reader.IsDBNull(8) ? null : reader.GetInt32(8),
+                SendStatus: reader.IsDBNull(9) ? null : reader.GetString(9),
+                SendErrorCode: reader.IsDBNull(10) ? null : reader.GetInt32(10),
+                SendErrorMessage: reader.IsDBNull(11) ? null : reader.GetString(11),
+                UpdatedAt: reader.IsDBNull(12) ? null : reader.GetInt64(12)
             ));
         }
 
@@ -1183,6 +1294,65 @@ WHERE id = $outboxId
         return cmd.ExecuteNonQuery() > 0;
     }
 
+    public bool UpsertOutboundStatus(OutboundStatusUpdateRequest req)
+    {
+        using var conn = Open();
+        using var tx = conn.BeginTransaction();
+
+        using var update = conn.CreateCommand();
+        update.Transaction = tx;
+        update.CommandText = @"
+UPDATE messages
+SET send_status = $sendStatus,
+    send_error_code = $sendErrorCode,
+    send_error_message = $sendErrorMessage,
+    updated_at = $updatedAt,
+    sim_slot_index = COALESCE($simSlotIndex, sim_slot_index),
+    sim_phone_number = COALESCE($simPhoneNumber, sim_phone_number),
+    sim_count = COALESCE($simCount, sim_count)
+WHERE id = $id;";
+        update.Parameters.AddWithValue("$sendStatus", req.Status);
+        update.Parameters.AddWithValue("$sendErrorCode", (object?)req.ErrorCode ?? DBNull.Value);
+        update.Parameters.AddWithValue("$sendErrorMessage", (object?)req.ErrorMessage ?? DBNull.Value);
+        update.Parameters.AddWithValue("$updatedAt", req.Timestamp);
+        update.Parameters.AddWithValue("$simSlotIndex", (object?)req.SimSlotIndex ?? DBNull.Value);
+        update.Parameters.AddWithValue("$simPhoneNumber", (object?)req.SimPhoneNumber ?? DBNull.Value);
+        update.Parameters.AddWithValue("$simCount", (object?)req.SimCount ?? DBNull.Value);
+        update.Parameters.AddWithValue("$id", req.MessageId);
+        var affected = update.ExecuteNonQuery();
+
+        if (affected <= 0)
+        {
+            using var insert = conn.CreateCommand();
+            insert.Transaction = tx;
+            insert.CommandText = @"
+INSERT OR IGNORE INTO messages(
+    id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count,
+    send_status, send_error_code, send_error_message, updated_at
+)
+VALUES(
+    $id, $deviceId, $phone, $content, $timestamp, 'outbound', $simSlotIndex, $simPhoneNumber, $simCount,
+    $sendStatus, $sendErrorCode, $sendErrorMessage, $updatedAt
+);";
+            insert.Parameters.AddWithValue("$id", req.MessageId);
+            insert.Parameters.AddWithValue("$deviceId", req.DeviceId);
+            insert.Parameters.AddWithValue("$phone", req.TargetPhone);
+            insert.Parameters.AddWithValue("$content", req.Content ?? string.Empty);
+            insert.Parameters.AddWithValue("$timestamp", req.Timestamp);
+            insert.Parameters.AddWithValue("$simSlotIndex", (object?)req.SimSlotIndex ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$simPhoneNumber", (object?)req.SimPhoneNumber ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$simCount", (object?)req.SimCount ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$sendStatus", req.Status);
+            insert.Parameters.AddWithValue("$sendErrorCode", (object?)req.ErrorCode ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$sendErrorMessage", (object?)req.ErrorMessage ?? DBNull.Value);
+            insert.Parameters.AddWithValue("$updatedAt", req.Timestamp);
+            affected = insert.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+        return affected > 0;
+    }
+
     private SqliteConnection Open()
     {
         var conn = OpenRaw();
@@ -1216,7 +1386,11 @@ CREATE TABLE IF NOT EXISTS messages(
     direction TEXT NOT NULL,
     sim_slot_index INTEGER,
     sim_phone_number TEXT,
-    sim_count INTEGER
+    sim_count INTEGER,
+    send_status TEXT,
+    send_error_code INTEGER,
+    send_error_message TEXT,
+    updated_at INTEGER NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS outbox(
@@ -1262,6 +1436,7 @@ CREATE TABLE IF NOT EXISTS api_logs(
 
 CREATE INDEX IF NOT EXISTS idx_messages_phone_ts ON messages(phone, timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
+CREATE INDEX IF NOT EXISTS idx_messages_updated_at ON messages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_gateway_sim_profiles_device_id ON gateway_sim_profiles(device_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_device_id ON outbox(device_id);
 CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
@@ -1275,6 +1450,12 @@ CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
         TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_slot_index INTEGER;");
         TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_phone_number TEXT;");
         TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_count INTEGER;");
+        TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN send_status TEXT;");
+        TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN send_error_code INTEGER;");
+        TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN send_error_message TEXT;");
+        TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN updated_at INTEGER;");
+        TryExecuteNonQuery(conn, "UPDATE messages SET updated_at = timestamp WHERE updated_at IS NULL OR updated_at <= 0;");
+        TryExecuteNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_messages_updated_at ON messages(updated_at);");
         TryExecuteNonQuery(conn, "ALTER TABLE outbox ADD COLUMN lease_token TEXT;");
         TryExecuteNonQuery(conn, "ALTER TABLE outbox ADD COLUMN leased_at INTEGER;");
         TryExecuteNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_outbox_device_lease ON outbox(device_id, leased_at);");
@@ -1314,6 +1495,18 @@ CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
 
         return Math.Clamp(fallback, 1, 8);
     }
+
+    private string? NormalizeSendStatusText(string? status)
+    {
+        return status?.Trim().ToLowerInvariant() switch
+        {
+            "queued" => "queued",
+            "dispatched" => "dispatched",
+            "sent" => "sent",
+            "failed" => "failed",
+            _ => null
+        };
+    }
 }
 
 public record RegisterGatewayRequest(string DeviceId, string PublicKeyPem);
@@ -1321,6 +1514,19 @@ public record UploadSmsRequest(string DeviceId, string EncryptedPayloadBase64);
 public record SendSmsRequest(string DeviceId, string TargetPhone, string Content, int? SimSlotIndex = null);
 public record PinConversationRequest(string Phone, bool Pinned);
 public record AckOutboundRequest(string DeviceId, long OutboxId, string AckToken);
+public record OutboundStatusUpdateRequest(
+    string DeviceId,
+    string MessageId,
+    string TargetPhone,
+    string Status,
+    long Timestamp,
+    string? Content = null,
+    int? SimSlotIndex = null,
+    string? SimPhoneNumber = null,
+    int? SimCount = null,
+    int? ErrorCode = null,
+    string? ErrorMessage = null
+);
 public record UpsertGatewaySimStateRequest(string DeviceId, IReadOnlyList<GatewaySimProfilePayload> Profiles);
 public record GatewaySimProfilePayload(int SlotIndex, int? SubscriptionId = null, string? DisplayName = null, string? PhoneNumber = null, int? SimCount = null);
 
@@ -1343,9 +1549,13 @@ public record SmsPayload(
     string Direction = "unknown",
     int? SimSlotIndex = null,
     string? SimPhoneNumber = null,
-    int? SimCount = null
+    int? SimCount = null,
+    string? SendStatus = null,
+    int? SendErrorCode = null,
+    string? SendErrorMessage = null,
+    long? UpdatedAt = null
 );
-public record OutboundInstruction(string TargetPhone, string Content, int? SimSlotIndex = null);
+public record OutboundInstruction(string MessageId, string TargetPhone, string Content, int? SimSlotIndex = null);
 public record GatewaySimProfileRecord(string DeviceId, int SlotIndex, int? SubscriptionId, string? DisplayName, string? PhoneNumber, int SimCount, long UpdatedAt);
 
 public sealed class PendingOutbound

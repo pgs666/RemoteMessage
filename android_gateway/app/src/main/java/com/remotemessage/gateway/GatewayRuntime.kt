@@ -1,10 +1,14 @@
 package com.remotemessage.gateway
 
+import android.app.Activity
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import java.io.ByteArrayOutputStream
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
 import android.net.Uri
+import android.os.Build
 import android.provider.Telephony
 import android.telephony.SubscriptionManager
 import android.telephony.SmsManager
@@ -39,6 +43,19 @@ data class GatewayConfig(
     val deviceId: String
 )
 
+data class OutboundStatusUpdate(
+    val messageId: String,
+    val targetPhone: String,
+    val status: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val content: String? = null,
+    val simSlotIndex: Int? = null,
+    val simPhoneNumber: String? = null,
+    val simCount: Int? = null,
+    val errorCode: Int? = null,
+    val errorMessage: String? = null
+)
+
 data class LocalSmsStats(
     val total: Int,
     val inbound: Int,
@@ -55,6 +72,7 @@ object GatewayRuntime {
     private const val KEYSTORE_ALIAS = "remote_message_gateway_rsa"
     private const val HISTORY_LAST_SYNC_TS_KEY = "history_last_sync_ts"
     private const val SERVER_PUBLIC_KEY_CACHE_MS = 60 * 1000L
+    private const val SEND_TRACKER_PREF = "gateway_send_tracker"
 
     @Volatile
     private var cachedServerPublicPem: String? = null
@@ -175,12 +193,14 @@ object GatewayRuntime {
                     throw decryptError
                 }
                 val payload = JSONObject(plain)
+                val messageId = payload.optString("messageId", "").trim()
+                    .takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
                 val phone = payload.getString("targetPhone")
                 val text = payload.getString("content")
                 val preferredSimSlotIndex = payload.optNullableInt("simSlotIndex")
                 GatewayDebugLog.add(
                     context,
-                    "Poll got outbound request: outboxId=${outboxId ?: -1}, phone=$phone, chars=${text.length}, requestedSlot=${preferredSimSlotIndex ?: -1}"
+                    "Poll got outbound request: outboxId=${outboxId ?: -1}, messageId=${messageId ?: "-"}, phone=$phone, chars=${text.length}, requestedSlot=${preferredSimSlotIndex ?: -1}"
                 )
                 val resolvedSim = GatewaySimSupport.resolveForSlotIndex(
                     snapshot = GatewaySimSupport.readSnapshot(context),
@@ -190,7 +210,54 @@ object GatewayRuntime {
                     context,
                     "Resolved send SIM: slot=${resolvedSim.slotIndex ?: -1}, subId=${resolvedSim.subscriptionId ?: -1}, simPhone=${resolvedSim.simPhoneNumber ?: ""}"
                 )
-                sendTextMessageCompat(smsManagerForSubscriptionId(resolvedSim.subscriptionId), phone, text)
+                runCatching {
+                    sendTextMessageCompat(
+                        context = context,
+                        cfg = cfg,
+                        smsManager = smsManagerForSubscriptionId(resolvedSim.subscriptionId),
+                        phone = phone,
+                        text = text,
+                        messageId = messageId,
+                        simSlotIndex = resolvedSim.slotIndex,
+                        simPhoneNumber = resolvedSim.simPhoneNumber,
+                        simCount = resolvedSim.simCount
+                    )
+                }.onSuccess {
+                    if (messageId != null) {
+                        reportOutboundStatusAsync(
+                            context = context,
+                            cfg = cfg,
+                            update = OutboundStatusUpdate(
+                                messageId = messageId,
+                                targetPhone = phone,
+                                content = text,
+                                status = "dispatched",
+                                simSlotIndex = resolvedSim.slotIndex,
+                                simPhoneNumber = resolvedSim.simPhoneNumber,
+                                simCount = resolvedSim.simCount
+                            )
+                        )
+                    }
+                }.onFailure { sendError ->
+                    if (messageId != null) {
+                        reportOutboundStatusAsync(
+                            context = context,
+                            cfg = cfg,
+                            update = OutboundStatusUpdate(
+                                messageId = messageId,
+                                targetPhone = phone,
+                                content = text,
+                                status = "failed",
+                                simSlotIndex = resolvedSim.slotIndex,
+                                simPhoneNumber = resolvedSim.simPhoneNumber,
+                                simCount = resolvedSim.simCount,
+                                errorCode = -1,
+                                errorMessage = "send invocation failed: ${sendError.debugSummary()}"
+                            )
+                        )
+                    }
+                    throw sendError
+                }.getOrThrow()
                 GatewayDebugLog.add(context, "SMS dispatch invoked for $phone")
                 if (outboxId != null && ackToken != null) {
                     ackOutboundSync(context, cfg, outboxId, ackToken)
@@ -641,12 +708,277 @@ object GatewayRuntime {
         }
     }
 
-    private fun sendTextMessageCompat(smsManager: SmsManager, phone: String, text: String) {
+    private fun sendTextMessageCompat(
+        context: Context,
+        cfg: GatewayConfig,
+        smsManager: SmsManager,
+        phone: String,
+        text: String,
+        messageId: String?,
+        simSlotIndex: Int?,
+        simPhoneNumber: String?,
+        simCount: Int?
+    ) {
         val parts = smsManager.divideMessage(text)
+        if (messageId.isNullOrBlank()) {
+            if (parts.size <= 1) {
+                smsManager.sendTextMessage(phone, null, text, null, null)
+            } else {
+                smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+            }
+            return
+        }
+
+        val sentIntents = ArrayList<PendingIntent>(parts.size)
+        val requestBase = ((System.currentTimeMillis() and 0x7fffffff).toInt() xor (messageId.hashCode() and 0x7fffffff))
+        for (index in parts.indices) {
+            sentIntents += buildSentPendingIntent(
+                context = context,
+                cfg = cfg,
+                messageId = messageId,
+                phone = phone,
+                content = text,
+                simSlotIndex = simSlotIndex,
+                simPhoneNumber = simPhoneNumber,
+                simCount = simCount,
+                requestCode = requestBase + index,
+                partIndex = index,
+                totalParts = parts.size
+            )
+        }
+
         if (parts.size <= 1) {
-            smsManager.sendTextMessage(phone, null, text, null, null)
+            smsManager.sendTextMessage(phone, null, text, sentIntents[0], null)
         } else {
-            smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+            smsManager.sendMultipartTextMessage(phone, null, parts, sentIntents, null)
+        }
+    }
+
+    private fun buildSentPendingIntent(
+        context: Context,
+        cfg: GatewayConfig,
+        messageId: String,
+        phone: String,
+        content: String,
+        simSlotIndex: Int?,
+        simPhoneNumber: String?,
+        simCount: Int?,
+        requestCode: Int,
+        partIndex: Int,
+        totalParts: Int
+    ): PendingIntent {
+        val intent = Intent(context, SmsSendStatusReceiver::class.java).apply {
+            action = GatewaySmsStatusContract.ACTION_SMS_SENT_STATUS
+            putExtra(GatewaySmsStatusContract.EXTRA_SERVER_BASE_URL, cfg.serverBaseUrl)
+            putExtra(GatewaySmsStatusContract.EXTRA_DEVICE_ID, cfg.deviceId)
+            putExtra(GatewaySmsStatusContract.EXTRA_MESSAGE_ID, messageId)
+            putExtra(GatewaySmsStatusContract.EXTRA_TARGET_PHONE, phone)
+            putExtra(GatewaySmsStatusContract.EXTRA_CONTENT, content.take(2048))
+            putExtra(GatewaySmsStatusContract.EXTRA_SIM_SLOT_INDEX, simSlotIndex ?: -1)
+            putExtra(GatewaySmsStatusContract.EXTRA_SIM_PHONE_NUMBER, simPhoneNumber ?: "")
+            putExtra(GatewaySmsStatusContract.EXTRA_SIM_COUNT, simCount ?: 0)
+            putExtra(GatewaySmsStatusContract.EXTRA_PART_INDEX, partIndex)
+            putExtra(GatewaySmsStatusContract.EXTRA_TOTAL_PARTS, totalParts)
+        }
+        var flags = PendingIntent.FLAG_UPDATE_CURRENT
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            flags = flags or PendingIntent.FLAG_IMMUTABLE
+        }
+        return PendingIntent.getBroadcast(context, requestCode, intent, flags)
+    }
+
+    fun handleSmsSentResult(context: Context, intent: Intent, resultCode: Int) {
+        if (intent.action != GatewaySmsStatusContract.ACTION_SMS_SENT_STATUS) {
+            return
+        }
+        val messageId = intent.getStringExtra(GatewaySmsStatusContract.EXTRA_MESSAGE_ID)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return
+
+        val phone = intent.getStringExtra(GatewaySmsStatusContract.EXTRA_TARGET_PHONE)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+            ?: return
+        val content = intent.getStringExtra(GatewaySmsStatusContract.EXTRA_CONTENT)
+        val simSlotRaw = intent.getIntExtra(GatewaySmsStatusContract.EXTRA_SIM_SLOT_INDEX, -1)
+        val simSlotIndex = simSlotRaw.takeIf { it >= 0 }
+        val simPhoneNumber = intent.getStringExtra(GatewaySmsStatusContract.EXTRA_SIM_PHONE_NUMBER)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        val simCount = intent.getIntExtra(GatewaySmsStatusContract.EXTRA_SIM_COUNT, 0).takeIf { it > 0 }
+        val partIndex = intent.getIntExtra(GatewaySmsStatusContract.EXTRA_PART_INDEX, 0).coerceAtLeast(0)
+        val totalParts = intent.getIntExtra(GatewaySmsStatusContract.EXTRA_TOTAL_PARTS, 1).coerceAtLeast(1)
+        val now = System.currentTimeMillis()
+        val failureMessage = describeSmsResultCode(resultCode)
+
+        if (totalParts <= 1) {
+            val status = if (resultCode == Activity.RESULT_OK) "sent" else "failed"
+            reportOutboundStatusFromIntent(
+                context = context,
+                intent = intent,
+                update = OutboundStatusUpdate(
+                    messageId = messageId,
+                    targetPhone = phone,
+                    content = content,
+                    status = status,
+                    timestamp = now,
+                    simSlotIndex = simSlotIndex,
+                    simPhoneNumber = simPhoneNumber,
+                    simCount = simCount,
+                    errorCode = if (status == "failed") resultCode else null,
+                    errorMessage = if (status == "failed") failureMessage else null
+                )
+            )
+            GatewayDebugLog.add(
+                context,
+                "SMS sent callback: messageId=$messageId, part=${partIndex + 1}/$totalParts, status=$status, resultCode=$resultCode"
+            )
+            return
+        }
+
+        val pref = context.getSharedPreferences(SEND_TRACKER_PREF, Context.MODE_PRIVATE)
+        val keyBase = messageId.take(96)
+        val doneKey = "${keyBase}_done"
+        val failCodeKey = "${keyBase}_fail_code"
+        val failMsgKey = "${keyBase}_fail_msg"
+        val done = pref.getInt(doneKey, 0) + 1
+        var failCode = pref.getInt(failCodeKey, Int.MIN_VALUE)
+        var failMsg = pref.getString(failMsgKey, null)
+        if (resultCode != Activity.RESULT_OK && failCode == Int.MIN_VALUE) {
+            failCode = resultCode
+            failMsg = failureMessage
+        }
+
+        if (done >= totalParts) {
+            pref.edit().remove(doneKey).remove(failCodeKey).remove(failMsgKey).apply()
+            val failed = failCode != Int.MIN_VALUE
+            val status = if (failed) "failed" else "sent"
+            reportOutboundStatusFromIntent(
+                context = context,
+                intent = intent,
+                update = OutboundStatusUpdate(
+                    messageId = messageId,
+                    targetPhone = phone,
+                    content = content,
+                    status = status,
+                    timestamp = now,
+                    simSlotIndex = simSlotIndex,
+                    simPhoneNumber = simPhoneNumber,
+                    simCount = simCount,
+                    errorCode = if (failed) failCode else null,
+                    errorMessage = if (failed) failMsg else null
+                )
+            )
+            GatewayDebugLog.add(
+                context,
+                "SMS sent callback (multipart done): messageId=$messageId, status=$status, parts=$totalParts"
+            )
+            return
+        }
+
+        pref.edit()
+            .putInt(doneKey, done)
+            .putInt(failCodeKey, failCode)
+            .putString(failMsgKey, failMsg)
+            .apply()
+        GatewayDebugLog.add(
+            context,
+            "SMS sent callback (multipart progress): messageId=$messageId, part=${partIndex + 1}/$totalParts, resultCode=$resultCode"
+        )
+    }
+
+    private fun describeSmsResultCode(resultCode: Int): String {
+        return when (resultCode) {
+            Activity.RESULT_OK -> "OK"
+            SmsManager.RESULT_ERROR_GENERIC_FAILURE -> "generic failure"
+            SmsManager.RESULT_ERROR_RADIO_OFF -> "radio off"
+            SmsManager.RESULT_ERROR_NULL_PDU -> "null PDU"
+            SmsManager.RESULT_ERROR_NO_SERVICE -> "no service"
+            SmsManager.RESULT_ERROR_LIMIT_EXCEEDED -> "limit exceeded"
+            SmsManager.RESULT_ERROR_FDN_CHECK_FAILURE -> "FDN check failure"
+            SmsManager.RESULT_RIL_RADIO_NOT_AVAILABLE -> "RIL radio not available"
+            SmsManager.RESULT_RIL_SMS_SEND_FAIL_RETRY -> "RIL send fail retry"
+            SmsManager.RESULT_RIL_NETWORK_REJECT -> "RIL network reject"
+            SmsManager.RESULT_RIL_INVALID_STATE -> "RIL invalid state"
+            SmsManager.RESULT_RIL_INVALID_ARGUMENTS -> "RIL invalid arguments"
+            SmsManager.RESULT_RIL_NO_MEMORY -> "RIL no memory"
+            SmsManager.RESULT_RIL_REQUEST_RATE_LIMITED -> "RIL request rate limited"
+            SmsManager.RESULT_RIL_INVALID_SMS_FORMAT -> "RIL invalid SMS format"
+            SmsManager.RESULT_RIL_SYSTEM_ERR -> "RIL system error"
+            SmsManager.RESULT_RIL_ENCODING_ERR -> "RIL encoding error"
+            SmsManager.RESULT_RIL_INVALID_SMSC_ADDRESS -> "RIL invalid SMSC address"
+            SmsManager.RESULT_RIL_MODEM_ERR -> "RIL modem error"
+            SmsManager.RESULT_RIL_NETWORK_ERR -> "RIL network error"
+            SmsManager.RESULT_RIL_INTERNAL_ERR -> "RIL internal error"
+            SmsManager.RESULT_RIL_OPERATION_NOT_ALLOWED -> "RIL operation not allowed"
+            SmsManager.RESULT_RIL_INVALID_MODEM_STATE -> "RIL invalid modem state"
+            SmsManager.RESULT_RIL_INVALID_SIM_STATE -> "RIL invalid SIM state"
+            SmsManager.RESULT_RIL_NO_RESOURCES -> "RIL no resources"
+            SmsManager.RESULT_RIL_CANCELLED -> "RIL cancelled"
+            SmsManager.RESULT_RIL_SIM_ABSENT -> "RIL SIM absent"
+            SmsManager.RESULT_RIL_SIMULTANEOUS_SMS_AND_CALL_NOT_ALLOWED -> "RIL SMS/call not allowed"
+            SmsManager.RESULT_RIL_ACCESS_BARRED -> "RIL access barred"
+            SmsManager.RESULT_RIL_BLOCKED_DUE_TO_CALL -> "RIL blocked due to call"
+            SmsManager.RESULT_RIL_SUBSCRIPTION_NOT_AVAILABLE -> "RIL subscription not available"
+            else -> "code=$resultCode"
+        }
+    }
+
+    private fun reportOutboundStatusFromIntent(context: Context, intent: Intent, update: OutboundStatusUpdate) {
+        val serverFromIntent = intent.getStringExtra(GatewaySmsStatusContract.EXTRA_SERVER_BASE_URL)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        val deviceFromIntent = intent.getStringExtra(GatewaySmsStatusContract.EXTRA_DEVICE_ID)
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
+        val configPref = context.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
+        val serverBase = serverFromIntent ?: configPref.getString("server_base", "")?.trim().orEmpty()
+        val deviceId = deviceFromIntent ?: configPref.getString("device_id", "")?.trim().orEmpty()
+        if (serverBase.isBlank() || deviceId.isBlank()) {
+            GatewayDebugLog.add(context, "Skip outbound status report: missing gateway config")
+            return
+        }
+        RuntimeConfig.password = configPref.getString("password", configPref.getString("api_key", ""))?.ifBlank { null }
+        reportOutboundStatusAsync(
+            context = context,
+            cfg = GatewayConfig(serverBase, deviceId),
+            update = update
+        )
+    }
+
+    private fun reportOutboundStatusAsync(context: Context, cfg: GatewayConfig, update: OutboundStatusUpdate) {
+        thread {
+            runCatching {
+                reportOutboundStatusSync(context, cfg, update)
+            }.onFailure {
+                GatewayDebugLog.add(context, "Outbound status report failed: ${it.debugSummary()}")
+            }
+        }
+    }
+
+    private fun reportOutboundStatusSync(context: Context, cfg: GatewayConfig, update: OutboundStatusUpdate) {
+        val json = JSONObject()
+            .put("deviceId", cfg.deviceId)
+            .put("messageId", update.messageId)
+            .put("targetPhone", update.targetPhone)
+            .put("status", update.status)
+            .put("timestamp", update.timestamp)
+            .put("content", update.content ?: JSONObject.NULL)
+            .put("simSlotIndex", update.simSlotIndex ?: JSONObject.NULL)
+            .put("simPhoneNumber", update.simPhoneNumber ?: JSONObject.NULL)
+            .put("simCount", update.simCount ?: JSONObject.NULL)
+            .put("errorCode", update.errorCode ?: JSONObject.NULL)
+            .put("errorMessage", update.errorMessage ?: JSONObject.NULL)
+        val req = Request.Builder()
+            .url("${cfg.serverBaseUrl}/api/gateway/outbound-status")
+            .post(json.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        httpClient(context, cfg).newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: "no body"
+                error("outbound-status failed: ${resp.code} $body")
+            }
         }
     }
 

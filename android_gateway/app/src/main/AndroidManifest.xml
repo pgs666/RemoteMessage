@@ -49,6 +49,11 @@
         </receiver>
 
         <receiver
+            android:name=".SmsSendStatusReceiver"
+            android:enabled="true"
+            android:exported="false" />
+
+        <receiver
             android:name=".MmsReceiver"
             android:enabled="true"
             android:exported="true"
