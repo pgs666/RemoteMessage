@@ -39,6 +39,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var app = builder.Build();
 var startupRepo = app.Services.GetRequiredService<SqliteRepository>();
+var startupCrypto = app.Services.GetRequiredService<CryptoState>();
 
 app.Logger.LogInformation(
     "RemoteMessage middle server starting. Runtime directory={RuntimeDirectory}; ExecutablePath={ExecutablePath}; AppContext.BaseDirectory={AppContextBaseDirectory}",
@@ -47,9 +48,10 @@ app.Logger.LogInformation(
     AppContext.BaseDirectory
 );
 app.Logger.LogInformation("Loaded config {ServerConfPath}; HTTPS port={HttpsPort}", serverSettings.ServerConfigFilePath, serverSettings.HttpsPort);
-app.Logger.LogInformation("Runtime files are created beside the executable: server.db, server.conf, server-cert.cer, server-cert.pfx");
+app.Logger.LogInformation("Runtime files are created beside the executable: server.db, server.conf, server-cert.cer, server-cert.pfx, server-crypto-private.pem");
 app.Logger.LogInformation("SQLite database path: {DatabaseFilePath}", startupRepo.DatabaseFilePath);
 app.Logger.LogInformation("Server log path: {ServerLogPath}", serverLogPath);
+app.Logger.LogInformation("Server crypto private key path: {ServerCryptoKeyPath}", startupCrypto.PrivateKeyFilePath);
 if (serverSettings.Password.Length < 16)
 {
     app.Logger.LogWarning("Configured password is shorter than 16 characters. Use a long random password before any internet exposure.");
@@ -561,12 +563,34 @@ public static class MessageIdentity
 
 public sealed class CryptoState
 {
-    private readonly RSA _serverRsa = RSA.Create(2048);
+    private readonly RSA _serverRsa;
     public string ServerPublicKeyPem { get; }
+    public string PrivateKeyFilePath { get; }
+
+    private const string PrivateKeyFileName = "server-crypto-private.pem";
 
     public CryptoState()
     {
+        PrivateKeyFilePath = Path.Combine(RuntimeLayout.RuntimeDirectory, PrivateKeyFileName);
+        _serverRsa = LoadOrCreateServerRsa(PrivateKeyFilePath);
         ServerPublicKeyPem = _serverRsa.ExportSubjectPublicKeyInfoPem();
+    }
+
+    private static RSA LoadOrCreateServerRsa(string privateKeyFilePath)
+    {
+        var rsa = RSA.Create();
+
+        if (File.Exists(privateKeyFilePath))
+        {
+            var existingPem = File.ReadAllText(privateKeyFilePath, Encoding.UTF8);
+            rsa.ImportFromPem(existingPem);
+            return rsa;
+        }
+
+        rsa.KeySize = 2048;
+        var privatePem = rsa.ExportPkcs8PrivateKeyPem();
+        File.WriteAllText(privateKeyFilePath, privatePem, new UTF8Encoding(false));
+        return rsa;
     }
 
     public string DecryptWithServerPrivateKey(string encryptedBase64)
