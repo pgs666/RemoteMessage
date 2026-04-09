@@ -124,6 +124,18 @@ jobs:
       - name: Apply client app icons
         run: python client/apply_client_icons.py client/flutter_client_build client/icons
 
+      - name: Ensure Android network permissions
+        shell: bash
+        run: |
+          set -euo pipefail
+          manifest="client/flutter_client_build/android/app/src/main/AndroidManifest.xml"
+          if ! grep -q "android.permission.INTERNET" "$manifest"; then
+            sed -i '/<manifest[^>]*>/a\    <uses-permission android:name="android.permission.INTERNET" />' "$manifest"
+          fi
+          if ! grep -q "android.permission.ACCESS_NETWORK_STATE" "$manifest"; then
+            sed -i '/<manifest[^>]*>/a\    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' "$manifest"
+          fi
+
       - name: Prepare stable Android signing
         shell: bash
         env:

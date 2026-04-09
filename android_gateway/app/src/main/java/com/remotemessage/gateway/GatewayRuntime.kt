@@ -128,42 +128,62 @@ object GatewayRuntime {
     }
 
     fun pollAndSendSync(context: Context, cfg: GatewayConfig): String {
-        GatewayDebugLog.add(context, "Poll start: ${cfg.deviceId}")
-        val (_, privatePem) = getOrCreateKeyPairPem(context)
-        val req = Request.Builder()
-            .url("${cfg.serverBaseUrl}/api/gateway/pull?deviceId=${Uri.encode(cfg.deviceId)}")
-            .get()
-            .build()
+        return try {
+            GatewayDebugLog.add(context, "Poll start: ${cfg.deviceId}")
+            val (_, privatePem) = getOrCreateKeyPairPem(context)
+            val req = Request.Builder()
+                .url("${cfg.serverBaseUrl}/api/gateway/pull?deviceId=${Uri.encode(cfg.deviceId)}")
+                .get()
+                .build()
 
-        httpClient(context, cfg).newCall(req).execute().use { resp ->
-            if (resp.code == 204) {
-                GatewayDebugLog.add(context, "Poll result: no pending message")
+            httpClient(context, cfg).newCall(req).execute().use { resp ->
+                if (resp.code == 204) {
+                    GatewayDebugLog.add(context, "Poll result: no pending message")
+                    flushPendingUploads(context, cfg)
+                    return "No pending message"
+                }
+                if (!resp.isSuccessful) {
+                    val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: "no body"
+                    GatewayDebugLog.add(context, "Poll failed: ${resp.code} $body")
+                    error("pull failed: ${resp.code} $body")
+                }
+                val body = resp.body?.string() ?: error("empty body")
+                val json = JSONObject(body)
+                val outboxId = json.optLong("outboxId").takeIf { it > 0L }
+                val ackToken = json.optString("ackToken", "").trim()
+                    .takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
+                val encrypted = json.getString("encryptedPayloadBase64")
+                val plain = decryptWithPrivateKey(privatePem, encrypted)
+                val payload = JSONObject(plain)
+                val phone = payload.getString("targetPhone")
+                val text = payload.getString("content")
+                val preferredSimSlotIndex = payload.optNullableInt("simSlotIndex")
+                GatewayDebugLog.add(
+                    context,
+                    "Poll got outbound request: outboxId=${outboxId ?: -1}, phone=$phone, chars=${text.length}, requestedSlot=${preferredSimSlotIndex ?: -1}"
+                )
+                val resolvedSim = GatewaySimSupport.resolveForSlotIndex(
+                    snapshot = GatewaySimSupport.readSnapshot(context),
+                    slotIndex = preferredSimSlotIndex
+                )
+                GatewayDebugLog.add(
+                    context,
+                    "Resolved send SIM: slot=${resolvedSim.slotIndex ?: -1}, subId=${resolvedSim.subscriptionId ?: -1}, simPhone=${resolvedSim.simPhoneNumber ?: ""}"
+                )
+                sendTextMessageCompat(smsManagerForSubscriptionId(resolvedSim.subscriptionId), phone, text)
+                GatewayDebugLog.add(context, "SMS dispatch invoked for $phone")
+                if (outboxId != null && ackToken != null) {
+                    ackOutboundSync(context, cfg, outboxId, ackToken)
+                    GatewayDebugLog.add(context, "Outbound ack success: outboxId=$outboxId")
+                } else {
+                    GatewayDebugLog.add(context, "Outbound ack skipped: missing outboxId/ackToken")
+                }
                 flushPendingUploads(context, cfg)
-                return "No pending message"
+                return "SMS sent to $phone"
             }
-            if (!resp.isSuccessful) {
-                val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: "no body"
-                GatewayDebugLog.add(context, "Poll failed: ${resp.code} $body")
-                error("pull failed: ${resp.code} $body")
-            }
-            val body = resp.body?.string() ?: error("empty body")
-            val json = JSONObject(body)
-            val encrypted = json.getString("encryptedPayloadBase64")
-            val plain = decryptWithPrivateKey(privatePem, encrypted)
-            val payload = JSONObject(plain)
-            val phone = payload.getString("targetPhone")
-            val text = payload.getString("content")
-            val preferredSimSlotIndex = payload.optNullableInt("simSlotIndex")
-            GatewayDebugLog.add(context, "Poll got outbound request: phone=$phone, chars=${text.length}, requestedSlot=${preferredSimSlotIndex ?: -1}")
-            val resolvedSim = GatewaySimSupport.resolveForSlotIndex(
-                snapshot = GatewaySimSupport.readSnapshot(context),
-                slotIndex = preferredSimSlotIndex
-            )
-            GatewayDebugLog.add(context, "Resolved send SIM: slot=${resolvedSim.slotIndex ?: -1}, subId=${resolvedSim.subscriptionId ?: -1}, simPhone=${resolvedSim.simPhoneNumber ?: ""}")
-            sendTextMessageCompat(smsManagerForSubscriptionId(resolvedSim.subscriptionId), phone, text)
-            GatewayDebugLog.add(context, "SMS dispatch invoked for $phone")
-            flushPendingUploads(context, cfg)
-            return "SMS sent to $phone"
+        } catch (t: Throwable) {
+            GatewayDebugLog.add(context, "Poll/send failed: ${t.debugSummary()}")
+            throw t
         }
     }
 
@@ -610,6 +630,23 @@ object GatewayRuntime {
         }
     }
 
+    private fun ackOutboundSync(context: Context, cfg: GatewayConfig, outboxId: Long, ackToken: String) {
+        val ackJson = JSONObject()
+            .put("deviceId", cfg.deviceId)
+            .put("outboxId", outboxId)
+            .put("ackToken", ackToken)
+        val req = Request.Builder()
+            .url("${cfg.serverBaseUrl}/api/gateway/pull/ack")
+            .post(ackJson.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        httpClient(context, cfg).newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: "no body"
+                error("ack failed: ${resp.code} $body")
+            }
+        }
+    }
+
     private fun httpClient(context: Context, cfg: GatewayConfig): OkHttpClient {
         val certStamp = GatewayCertificateStore.certFile(context).let { file ->
             if (file.exists()) file.lastModified() else -1L
@@ -819,6 +856,17 @@ object GatewayRuntime {
 
     private fun JSONObject.optNullableInt(name: String): Int? {
         return if (has(name) && !isNull(name)) getInt(name) else null
+    }
+
+    private fun Throwable.debugSummary(): String {
+        val type = this::class.java.simpleName
+        val msg = message ?: "(no message)"
+        val topFrames = stackTrace
+            .take(4)
+            .joinToString(" <- ") { frame ->
+                "${frame.className.substringAfterLast('.')}.${frame.methodName}:${frame.lineNumber}"
+            }
+        return if (topFrames.isBlank()) "$type: $msg" else "$type: $msg @ $topFrames"
     }
 
     private fun wrapPkcs1PublicKey(pkcs1: ByteArray): ByteArray {

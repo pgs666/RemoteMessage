@@ -262,13 +262,26 @@ app.MapPost("/api/client/send", (SendSmsRequest req, GatewayRegistry registry, S
 
 app.MapGet("/api/gateway/pull", (string deviceId, SqliteRepository repo) =>
 {
-    var found = repo.DequeueOutbound(deviceId);
+    var found = repo.LeaseNextOutbound(deviceId);
     if (found is null)
     {
         return Results.NoContent();
     }
 
     return Results.Ok(found);
+});
+
+app.MapPost("/api/gateway/pull/ack", (AckOutboundRequest req, SqliteRepository repo) =>
+{
+    if (ValidateAckOutboundRequest(req) is { } error)
+    {
+        return error;
+    }
+
+    var acked = repo.AckOutbound(req.DeviceId, req.OutboxId, req.AckToken);
+    return acked
+        ? Results.Ok(new { ok = true })
+        : Results.NotFound(new { ok = false, error = "pending outbound not found" });
 });
 
 app.Run();
@@ -508,6 +521,26 @@ static IResult? ValidateSendRequest(SendSmsRequest req)
     if (req.SimSlotIndex.HasValue && req.SimSlotIndex.Value is < 0 or > 7)
     {
         return Results.BadRequest("simSlotIndex invalid");
+    }
+
+    return null;
+}
+
+static IResult? ValidateAckOutboundRequest(AckOutboundRequest req)
+{
+    if (string.IsNullOrWhiteSpace(req.DeviceId) || string.IsNullOrWhiteSpace(req.AckToken) || req.OutboxId <= 0)
+    {
+        return Results.BadRequest("deviceId/outboxId/ackToken required");
+    }
+
+    if (req.DeviceId.Length > 128)
+    {
+        return Results.BadRequest("deviceId too long");
+    }
+
+    if (req.AckToken.Length > 128)
+    {
+        return Results.BadRequest("ackToken too long");
     }
 
     return null;
@@ -831,6 +864,7 @@ public sealed class HttpsCertificateSettings
 
 public sealed class SqliteRepository
 {
+    private const long OutboxLeaseTimeoutMs = 60_000;
     private readonly string _connectionString;
     public string DatabaseFilePath { get; }
 
@@ -1074,19 +1108,23 @@ VALUES($method, $path, $status, $ip, $duration, $ts);";
         cmd.ExecuteNonQuery();
     }
 
-    public PendingOutbound? DequeueOutbound(string deviceId)
+    public PendingOutbound? LeaseNextOutbound(string deviceId)
     {
         using var conn = Open();
         using var tx = conn.BeginTransaction();
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var leaseExpiredBefore = now - OutboxLeaseTimeoutMs;
         using var select = conn.CreateCommand();
         select.Transaction = tx;
         select.CommandText = @"
 SELECT id, device_id, encrypted_payload_base64
 FROM outbox
 WHERE device_id = $deviceId
+  AND (lease_token IS NULL OR leased_at IS NULL OR leased_at <= $leaseExpiredBefore)
 ORDER BY id ASC
 LIMIT 1;";
         select.Parameters.AddWithValue("$deviceId", deviceId);
+        select.Parameters.AddWithValue("$leaseExpiredBefore", leaseExpiredBefore);
 
         using var reader = select.ExecuteReader();
         if (!reader.Read())
@@ -1096,20 +1134,53 @@ LIMIT 1;";
         }
 
         var id = reader.GetInt64(0);
+        var leaseToken = Guid.NewGuid().ToString("N");
         var item = new PendingOutbound
         {
+            OutboxId = id,
+            AckToken = leaseToken,
             DeviceId = reader.GetString(1),
             EncryptedPayloadBase64 = reader.GetString(2)
         };
         reader.Close();
 
-        using var del = conn.CreateCommand();
-        del.Transaction = tx;
-        del.CommandText = "DELETE FROM outbox WHERE id = $id;";
-        del.Parameters.AddWithValue("$id", id);
-        del.ExecuteNonQuery();
+        using var lease = conn.CreateCommand();
+        lease.Transaction = tx;
+        lease.CommandText = @"
+UPDATE outbox
+SET lease_token = $leaseToken, leased_at = $leasedAt
+WHERE id = $id
+  AND device_id = $deviceId
+  AND (lease_token IS NULL OR leased_at IS NULL OR leased_at <= $leaseExpiredBefore);";
+        lease.Parameters.AddWithValue("$leaseToken", leaseToken);
+        lease.Parameters.AddWithValue("$leasedAt", now);
+        lease.Parameters.AddWithValue("$id", id);
+        lease.Parameters.AddWithValue("$deviceId", deviceId);
+        lease.Parameters.AddWithValue("$leaseExpiredBefore", leaseExpiredBefore);
+        var leased = lease.ExecuteNonQuery();
+        if (leased <= 0)
+        {
+            tx.Rollback();
+            return null;
+        }
+
         tx.Commit();
         return item;
+    }
+
+    public bool AckOutbound(string deviceId, long outboxId, string ackToken)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+DELETE FROM outbox
+WHERE id = $outboxId
+  AND device_id = $deviceId
+  AND lease_token = $ackToken;";
+        cmd.Parameters.AddWithValue("$outboxId", outboxId);
+        cmd.Parameters.AddWithValue("$deviceId", deviceId);
+        cmd.Parameters.AddWithValue("$ackToken", ackToken);
+        return cmd.ExecuteNonQuery() > 0;
     }
 
     private SqliteConnection Open()
@@ -1152,7 +1223,9 @@ CREATE TABLE IF NOT EXISTS outbox(
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     device_id TEXT NOT NULL,
     encrypted_payload_base64 TEXT NOT NULL,
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    lease_token TEXT,
+    leased_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS pinned_conversations(
@@ -1191,6 +1264,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_phone_ts ON messages(phone, timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 CREATE INDEX IF NOT EXISTS idx_gateway_sim_profiles_device_id ON gateway_sim_profiles(device_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_device_id ON outbox(device_id);
+CREATE INDEX IF NOT EXISTS idx_outbox_device_lease ON outbox(device_id, leased_at);
 CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
 ";
         cmd.ExecuteNonQuery();
@@ -1202,6 +1276,8 @@ CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
         TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_slot_index INTEGER;");
         TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_phone_number TEXT;");
         TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_count INTEGER;");
+        TryExecuteNonQuery(conn, "ALTER TABLE outbox ADD COLUMN lease_token TEXT;");
+        TryExecuteNonQuery(conn, "ALTER TABLE outbox ADD COLUMN leased_at INTEGER;");
     }
 
     private void TryExecuteNonQuery(SqliteConnection conn, string sql)
@@ -1244,6 +1320,7 @@ public record RegisterGatewayRequest(string DeviceId, string PublicKeyPem);
 public record UploadSmsRequest(string DeviceId, string EncryptedPayloadBase64);
 public record SendSmsRequest(string DeviceId, string TargetPhone, string Content, int? SimSlotIndex = null);
 public record PinConversationRequest(string Phone, bool Pinned);
+public record AckOutboundRequest(string DeviceId, long OutboxId, string AckToken);
 public record UpsertGatewaySimStateRequest(string DeviceId, IReadOnlyList<GatewaySimProfilePayload> Profiles);
 public record GatewaySimProfilePayload(int SlotIndex, int? SubscriptionId = null, string? DisplayName = null, string? PhoneNumber = null, int? SimCount = null);
 
@@ -1273,6 +1350,12 @@ public record GatewaySimProfileRecord(string DeviceId, int SlotIndex, int? Subsc
 
 public sealed class PendingOutbound
 {
+    [JsonPropertyName("outboxId")]
+    public long OutboxId { get; set; }
+
+    [JsonPropertyName("ackToken")]
+    public string AckToken { get; set; } = string.Empty;
+
     [JsonPropertyName("deviceId")]
     public string DeviceId { get; set; } = string.Empty;
 
