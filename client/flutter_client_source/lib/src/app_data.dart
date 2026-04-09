@@ -189,6 +189,28 @@ class AppSettingsStore {
 
   sqlite.Database? _db;
 
+  static bool isLikelyTlsCertificateIssue(Object error) {
+    final text = error.toString().toLowerCase();
+    const keywords = <String>[
+      'handshakeexception',
+      'handshake',
+      'certificate',
+      'x509',
+      'tls',
+      'ssl',
+      'secure socket',
+      'certificateverifyfailed',
+    ];
+    return keywords.any(text.contains);
+  }
+
+  static String iosSystemCertificateHint({required bool isZh}) {
+    if (isZh) {
+      return '请在 iOS 系统中安装并信任 server-cert.cer：先安装描述文件，再到 设置 > 通用 > 关于本机 > 证书信任设置 启用完全信任。';
+    }
+    return 'Install and trust server-cert.cer in iOS system settings (install profile first, then enable full trust under Settings > General > About > Certificate Trust Settings).';
+  }
+
   Future<void> load() async {
     final db = await _openDb();
     _ensureSchema(db);

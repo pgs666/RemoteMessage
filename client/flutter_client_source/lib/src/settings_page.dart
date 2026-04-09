@@ -91,6 +91,14 @@ class _SettingsPageState extends State<SettingsPage> {
   bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
 
+  String _appendIosCertificateHint(Object error) {
+    final base = error.toString();
+    if (!Platform.isIOS || !AppSettingsStore.isLikelyTlsCertificateIssue(error)) {
+      return base;
+    }
+    return '$base\n${AppSettingsStore.iosSystemCertificateHint(isZh: _isZh)}';
+  }
+
   @override
   void initState() {
     super.initState();
@@ -273,11 +281,12 @@ class _SettingsPageState extends State<SettingsPage> {
       await widget.settings.importTrustedCertificate(bytes);
       if (!mounted) return;
       setState(() {
-        _certStatus = '${tr('证书已导入：', 'Certificate imported: ')}${file.name}';
+        _certStatus = '${tr('证书已导入：', 'Certificate imported: ')}${file.name}'
+            '${Platform.isIOS ? '\n${tr('若仍连接失败，请在 iOS 系统中安装并信任该证书。', 'If connection still fails, install and trust this cert in iOS system settings.')}' : ''}';
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _certStatus = '${tr('证书导入失败', 'Certificate import failed')}: $e');
+      setState(() => _certStatus = '${tr('证书导入失败', 'Certificate import failed')}: ${_appendIosCertificateHint(e)}');
     } finally {
       if (mounted) {
         setState(() => _certBusy = false);
@@ -331,15 +340,16 @@ class _SettingsPageState extends State<SettingsPage> {
         _gatewayOnlineStatusError = null;
       });
     } catch (e) {
+      final displayError = _appendIosCertificateHint(e);
       if (!mounted) return;
       setState(() {
         _gatewayOnlineStatus = null;
-        _gatewayOnlineStatusError = '$e';
+        _gatewayOnlineStatusError = displayError;
       });
       if (interactive) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${tr('获取网关状态失败', 'Failed to fetch gateway status')}: $e'),
+            content: Text('${tr('获取网关状态失败', 'Failed to fetch gateway status')}: $displayError'),
             behavior: SnackBarBehavior.floating,
           ),
         );

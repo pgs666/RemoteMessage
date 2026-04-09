@@ -59,6 +59,14 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
   String tr(String zh, String en) => _isZh ? zh : en;
   bool get _showSimSelection => _gatewaySimProfiles.length > 1;
 
+  String _formatErrorWithIosCertificateHint(Object error) {
+    final base = error.toString();
+    if (!Platform.isIOS || !AppSettingsStore.isLikelyTlsCertificateIssue(error)) {
+      return base;
+    }
+    return '$base\n${AppSettingsStore.iosSystemCertificateHint(isZh: _isZh)}';
+  }
+
   LocalDatabase get _localDb {
     final db = _db;
     if (db == null) {
@@ -346,7 +354,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
       }
     } catch (e) {
       if (!interactive || !mounted) return;
-      await _showToastStatus('${tr('SIM 信息刷新失败', 'SIM info refresh failed')}: $e', error: true);
+      await _showToastStatus(
+        '${tr('SIM 信息刷新失败', 'SIM info refresh failed')}: ${_formatErrorWithIosCertificateHint(e)}',
+        error: true,
+      );
     }
   }
 
@@ -398,7 +409,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     } catch (e) {
       if (!mounted) return;
       if (interactive) {
-        await _showToastStatus('${tr('同步失败', 'Sync failed')}: $e', error: true);
+        await _showToastStatus(
+          '${tr('同步失败', 'Sync failed')}: ${_formatErrorWithIosCertificateHint(e)}',
+          error: true,
+        );
       }
     } finally {
       _syncingNow = false;
@@ -477,7 +491,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
       await _syncInbox(interactive: true);
       await _showToastStatus(tr('消息已进入队列', 'Message queued'));
     } catch (e) {
-      await _showToastStatus('${tr('发送失败', 'Send failed')}: $e', error: true);
+      await _showToastStatus(
+        '${tr('发送失败', 'Send failed')}: ${_formatErrorWithIosCertificateHint(e)}',
+        error: true,
+      );
     } finally {
       if (mounted) {
         setState(() => _loading = false);
