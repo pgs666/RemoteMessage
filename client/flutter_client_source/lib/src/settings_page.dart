@@ -1,11 +1,11 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
-import 'package:image_picker/image_picker.dart';
 
 import 'app_data.dart';
 import 'onboarding_qr.dart';
+import 'qr_live_scan_page.dart';
 
 enum _OnboardingScanSource {
   camera,
@@ -94,7 +94,6 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _gatewayStatusBusy = false;
   GatewayOnlineStatus? _gatewayOnlineStatus;
   String? _gatewayOnlineStatusError;
-  final ImagePicker _imagePicker = ImagePicker();
 
   bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
@@ -202,12 +201,15 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<OnboardingQrPayload?> _scanOnboardingFromCamera() async {
-    final photo = await _imagePicker.pickImage(source: ImageSource.camera);
-    if (photo == null) {
+    if (!mounted) return null;
+    final raw = await Navigator.of(context).push<String>(
+      MaterialPageRoute(
+        builder: (_) => QrLiveScanPage(isZh: _isZh),
+      ),
+    );
+    if (raw == null || raw.trim().isEmpty) {
       return null;
     }
-    final bytes = await photo.readAsBytes();
-    final raw = decodeQrTextFromImageBytes(bytes);
     return OnboardingQrPayload.parse(raw);
   }
 
@@ -227,7 +229,7 @@ class _SettingsPageState extends State<SettingsPage> {
       return null;
     }
     final bytes = await file.readAsBytes();
-    final raw = decodeQrTextFromImageBytes(bytes);
+    final raw = await decodeQrTextFromImageBytesAsync(bytes);
     return OnboardingQrPayload.parse(raw);
   }
 
@@ -348,7 +350,7 @@ class _SettingsPageState extends State<SettingsPage> {
               ),
               const SizedBox(height: 10),
               Align(
-                alignment: Alignment.centerLeft,
+                alignment: Alignment.center,
                 child: OutlinedButton.icon(
                   onPressed: () => _scanOnboardingIntoControllers(
                     serverController: serverCtrl,
@@ -794,10 +796,13 @@ class _SettingsPageState extends State<SettingsPage> {
               decoration: InputDecoration(labelText: tr('密码', 'Password'), border: const OutlineInputBorder()),
             ),
             const SizedBox(height: 12),
-            OutlinedButton.icon(
-              onPressed: _scanOnboardingIntoMainForm,
-              icon: const Icon(Icons.qr_code_scanner),
-              label: Text(tr('扫码填充服务器与密码', 'Scan QR to fill server/password')),
+            Align(
+              alignment: Alignment.center,
+              child: OutlinedButton.icon(
+                onPressed: _scanOnboardingIntoMainForm,
+                icon: const Icon(Icons.qr_code_scanner),
+                label: Text(tr('扫码填充服务器与密码', 'Scan QR to fill server/password')),
+              ),
             ),
             const SizedBox(height: 6),
             Text(

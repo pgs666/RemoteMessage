@@ -30,7 +30,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 image_picker
+          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -76,7 +76,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 image_picker
+          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -127,7 +127,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 image_picker
+          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -275,7 +275,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 image_picker
+          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -292,6 +292,15 @@ jobs:
 
       - name: Configure client app identity
         run: python client/configure_client_app_identity.py client/flutter_client_build
+
+      - name: Ensure iOS camera usage description
+        shell: bash
+        run: |
+          set -euo pipefail
+          plist="client/flutter_client_build/ios/Runner/Info.plist"
+          if ! /usr/libexec/PlistBuddy -c "Print :NSCameraUsageDescription" "$plist" >/dev/null 2>&1; then
+            /usr/libexec/PlistBuddy -c "Add :NSCameraUsageDescription string Scan onboarding QR codes" "$plist"
+          fi
 
       - name: Build iOS (no codesign)
         working-directory: client/flutter_client_build

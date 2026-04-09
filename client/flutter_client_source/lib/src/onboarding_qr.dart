@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:typed_data';
 
+import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing2/qrcode.dart';
 import 'package:zxing2/zxing2.dart';
@@ -102,4 +103,12 @@ String decodeQrTextFromImageBytes(Uint8List bytes) {
   }
 
   throw FormatException('QR code not found in image: ${lastError ?? "unknown"}');
+}
+
+Future<String> decodeQrTextFromImageBytesAsync(Uint8List bytes) {
+  return compute(_decodeQrTextFromImageBytesInIsolate, bytes);
+}
+
+String _decodeQrTextFromImageBytesInIsolate(Uint8List bytes) {
+  return decodeQrTextFromImageBytes(bytes);
 }
