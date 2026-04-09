@@ -5,6 +5,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
 
+import 'android_launcher_icon_service.dart';
 import 'app_data.dart';
 import 'compose_message_page.dart';
 import 'settings_page.dart';
@@ -259,7 +260,9 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     widget.settings.serverBaseUrl = result.serverBaseUrl;
     widget.settings.deviceId = result.deviceId;
     widget.settings.password = result.password;
+    widget.settings.androidLauncherIconMode = result.androidLauncherIconMode;
     widget.onThemeChanged(result.themeMode);
+    await AndroidLauncherIconService.applyMode(result.androidLauncherIconMode);
 
     final profileChanged = result.activeProfileId != _activeProfileId;
     if (profileChanged) {
@@ -420,6 +423,32 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     } catch (_) {
       // keep local pin even if remote call fails
     }
+  }
+
+  Future<void> _showConversationActions(ConversationSummary conversation) async {
+    final nextPinned = await showModalBottomSheet<bool>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Wrap(
+            children: [
+              ListTile(
+                leading: Icon(conversation.pinned ? Icons.push_pin_outlined : Icons.push_pin),
+                title: Text(conversation.pinned ? tr('取消置顶', 'Unpin conversation') : tr('置顶会话', 'Pin conversation')),
+                onTap: () => Navigator.pop(sheetContext, !conversation.pinned),
+              ),
+              ListTile(
+                leading: const Icon(Icons.close),
+                title: Text(tr('取消', 'Cancel')),
+                onTap: () => Navigator.pop(sheetContext, null),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (nextPinned == null) return;
+    await _setPin(conversation.phone, nextPinned);
   }
 
   Future<void> _sendSmsToActive() async {
@@ -657,9 +686,16 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                     );
                   }
                 },
-                trailing: IconButton(
-                  icon: Icon(c.pinned ? Icons.push_pin : Icons.push_pin_outlined),
-                  onPressed: () => _setPin(c.phone, !c.pinned),
+                onLongPress: () => _showConversationActions(c),
+                trailing: SizedBox(
+                  width: 90,
+                  child: Text(
+                    _formatConversationTimestamp(c.lastMessage.timestamp),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.end,
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
                 ),
               );
             },
@@ -897,6 +933,26 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
   }
 
+  String _formatConversationTimestamp(int timestampMs) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(timestampMs).toLocal();
+    final now = DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    final tomorrowStart = todayStart.add(const Duration(days: 1));
+
+    if (!dt.isBefore(todayStart) && dt.isBefore(tomorrowStart)) {
+      return MaterialLocalizations.of(context).formatTimeOfDay(
+        TimeOfDay.fromDateTime(dt),
+        alwaysUse24HourFormat: MediaQuery.maybeOf(context)?.alwaysUse24HourFormat ?? false,
+      );
+    }
+
+    if (dt.year == now.year) {
+      return _isZh ? '${dt.month}月${dt.day}日' : '${dt.month}/${dt.day}';
+    }
+
+    return _isZh ? '${dt.year}年${dt.month}月${dt.day}日' : '${dt.year}/${dt.month}/${dt.day}';
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -997,8 +1053,4 @@ class _MobileChatPageState extends State<MobileChatPage> {
     );
   }
 }
-
-
-
-
 

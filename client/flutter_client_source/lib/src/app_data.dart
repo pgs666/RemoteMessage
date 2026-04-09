@@ -157,11 +157,33 @@ class AppServerProfile {
   }
 }
 
+enum AndroidLauncherIconMode {
+  defaultMode('default'),
+  light('light'),
+  dark('dark');
+
+  final String persistedValue;
+
+  const AndroidLauncherIconMode(this.persistedValue);
+
+  static AndroidLauncherIconMode fromPersisted(String? value) {
+    switch ((value ?? '').trim().toLowerCase()) {
+      case 'light':
+        return AndroidLauncherIconMode.light;
+      case 'dark':
+        return AndroidLauncherIconMode.dark;
+      default:
+        return AndroidLauncherIconMode.defaultMode;
+    }
+  }
+}
+
 class AppSettingsStore {
   String serverBaseUrl = 'https://127.0.0.1:5001';
   String deviceId = 'android-arm64-gateway';
   String password = '';
   ThemeMode themeMode = ThemeMode.system;
+  AndroidLauncherIconMode androidLauncherIconMode = AndroidLauncherIconMode.defaultMode;
   String activeProfileId = 'default';
   List<AppServerProfile> profiles = const [];
 
@@ -172,6 +194,7 @@ class AppSettingsStore {
     _ensureSchema(db);
 
     themeMode = _parseThemeMode(_readSetting(db, 'themeMode') ?? 'system');
+    androidLauncherIconMode = AndroidLauncherIconMode.fromPersisted(_readSetting(db, 'androidLauncherIconMode'));
     _bootstrapProfilesIfMissing(db);
 
     activeProfileId = _readSetting(db, 'activeProfileId') ?? activeProfileId;
@@ -225,6 +248,7 @@ class AppSettingsStore {
     );
 
     _writeSetting(db, 'themeMode', themeMode.name);
+    _writeSetting(db, 'androidLauncherIconMode', androidLauncherIconMode.persistedValue);
     _writeSetting(db, 'activeProfileId', activeProfileId);
   }
 

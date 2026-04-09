@@ -1,4 +1,5 @@
-﻿import 'package:file_selector/file_selector.dart';
+﻿import 'dart:io';
+import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
 import 'app_data.dart';
@@ -9,6 +10,7 @@ class SettingsResult {
   final String password;
   final ThemeMode themeMode;
   final String activeProfileId;
+  final AndroidLauncherIconMode androidLauncherIconMode;
   final bool clearLocalDatabase;
 
   const SettingsResult({
@@ -17,6 +19,7 @@ class SettingsResult {
     required this.password,
     required this.themeMode,
     required this.activeProfileId,
+    required this.androidLauncherIconMode,
     this.clearLocalDatabase = false,
   });
 }
@@ -41,6 +44,7 @@ class _SettingsPageState extends State<SettingsPage> {
   late final TextEditingController _deviceCtrl;
   late final TextEditingController _passwordCtrl;
   late ThemeMode _themeMode;
+  late AndroidLauncherIconMode _androidLauncherIconMode;
 
   late List<AppServerProfile> _profiles;
   late String _activeProfileId;
@@ -82,6 +86,7 @@ class _SettingsPageState extends State<SettingsPage> {
     _deviceCtrl = TextEditingController();
     _passwordCtrl = TextEditingController();
     _themeMode = widget.settings.themeMode;
+    _androidLauncherIconMode = widget.settings.androidLauncherIconMode;
 
     _loadProfileIntoForm(_activeProfileId);
     _reloadCertStatus();
@@ -254,6 +259,7 @@ class _SettingsPageState extends State<SettingsPage> {
     widget.settings.deviceId = active.deviceId;
     widget.settings.password = active.password;
     widget.settings.themeMode = _themeMode;
+    widget.settings.androidLauncherIconMode = _androidLauncherIconMode;
     await widget.settings.save();
 
     if (!mounted) return;
@@ -265,6 +271,7 @@ class _SettingsPageState extends State<SettingsPage> {
         password: active.password,
         themeMode: _themeMode,
         activeProfileId: _activeProfileId,
+        androidLauncherIconMode: _androidLauncherIconMode,
         clearLocalDatabase: clearLocalDatabase,
       ),
     );
@@ -433,6 +440,31 @@ class _SettingsPageState extends State<SettingsPage> {
               ],
               onChanged: (v) => setState(() => _themeMode = v ?? ThemeMode.system),
             ),
+            if (Platform.isAndroid) ...[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<AndroidLauncherIconMode>(
+                value: _androidLauncherIconMode,
+                decoration: InputDecoration(
+                  labelText: tr('安卓桌面图标', 'Android Launcher Icon'),
+                  border: const OutlineInputBorder(),
+                ),
+                items: [
+                  DropdownMenuItem(
+                    value: AndroidLauncherIconMode.defaultMode,
+                    child: Text(tr('默认', 'Default')),
+                  ),
+                  DropdownMenuItem(
+                    value: AndroidLauncherIconMode.light,
+                    child: Text(tr('浅色图标', 'Light Icon')),
+                  ),
+                  DropdownMenuItem(
+                    value: AndroidLauncherIconMode.dark,
+                    child: Text(tr('深色图标', 'Dark Icon')),
+                  ),
+                ],
+                onChanged: (v) => setState(() => _androidLauncherIconMode = v ?? AndroidLauncherIconMode.defaultMode),
+              ),
+            ],
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: _certBusy ? null : _importServerCertificate,

@@ -1,5 +1,6 @@
 ﻿import 'package:flutter/material.dart';
 
+import 'android_launcher_icon_service.dart';
 import 'app_data.dart';
 import 'message_home_page.dart';
 
@@ -17,7 +18,8 @@ class _RemoteMessageAppState extends State<RemoteMessageApp> {
   @override
   void initState() {
     super.initState();
-    settings.load().then((_) {
+    settings.load().then((_) async {
+      await AndroidLauncherIconService.applyMode(settings.androidLauncherIconMode);
       if (!mounted) return;
       setState(() => _themeMode = settings.themeMode);
     });
@@ -40,3 +42,4 @@ class _RemoteMessageAppState extends State<RemoteMessageApp> {
     );
   }
 }
+

@@ -50,7 +50,7 @@ def main() -> int:
     default_icon = load_square_image(default_icon_path)
     dark_icon = load_square_image(dark_icon_path)
 
-    apply_android_icons(app_dir, default_icon)
+    apply_android_icons(app_dir, default_icon, dark_icon)
     apply_ios_icons(app_dir, default_icon, dark_icon)
     apply_linux_icon(app_dir, default_icon)
     apply_windows_icon(app_dir, default_icon)
@@ -75,13 +75,17 @@ def save_png(image: Image.Image, path: Path, size: int) -> None:
     resized(image, size).save(path, format="PNG")
 
 
-def apply_android_icons(app_dir: Path, default_icon: Image.Image) -> None:
+def apply_android_icons(app_dir: Path, default_icon: Image.Image, dark_icon: Image.Image) -> None:
     res_dir = app_dir / "android" / "app" / "src" / "main" / "res"
     if not res_dir.exists():
         return
 
     for folder_name, size in ANDROID_ICON_SIZES.items():
         save_png(default_icon, res_dir / folder_name / "ic_launcher.png", size)
+        save_png(default_icon, res_dir / folder_name / "ic_launcher_default.png", size)
+        save_png(default_icon, res_dir / folder_name / "ic_launcher_light.png", size)
+        save_png(dark_icon, res_dir / folder_name / "ic_launcher_dark.png", size)
+        save_png(default_icon, res_dir / folder_name / "ic_launcher_round.png", size)
 
 
 def apply_linux_icon(app_dir: Path, default_icon: Image.Image) -> None:
