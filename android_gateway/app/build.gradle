@@ -21,7 +21,7 @@ android {
 
     defaultConfig {
         applicationId "com.remotemessage.gateway"
-        minSdk 23
+        minSdk 21
         targetSdk 34
         versionCode ciVersionCode
         versionName ciVersionName

@@ -7,8 +7,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.provider.Telephony
-import android.telephony.SubscriptionInfo
-import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import androidx.core.content.ContextCompat
 import kotlin.math.abs
@@ -37,6 +35,8 @@ data class GatewayResolvedSimInfo(
 
 object GatewaySimSupport {
     private const val PREF_NAME = "gateway_config"
+    private const val INVALID_SUBSCRIPTION_ID = -1
+    private const val SUBSCRIPTION_SERVICE = "telephony_subscription_service"
 
     fun readSnapshot(context: Context): GatewaySimSnapshot {
         val activeProfiles = readActiveProfiles(context)
@@ -277,7 +277,6 @@ object GatewaySimSupport {
 
     private fun extractSubscriptionId(intent: Intent): Int? {
         val candidates = listOf(
-            SubscriptionManager.EXTRA_SUBSCRIPTION_INDEX,
             "subscription",
             "subscription_id",
             "sub_id",
@@ -286,8 +285,8 @@ object GatewaySimSupport {
         return candidates.firstNotNullOfOrNull { key ->
             intent.extras?.takeIf { it.containsKey(key) }
                 ?.let {
-                    val value = intent.getIntExtra(key, SubscriptionManager.INVALID_SUBSCRIPTION_ID)
-                    value.takeIf { subId -> subId != SubscriptionManager.INVALID_SUBSCRIPTION_ID }
+                    val value = intent.getIntExtra(key, INVALID_SUBSCRIPTION_ID)
+                    value.takeIf { subId -> subId != INVALID_SUBSCRIPTION_ID }
                 }
         }
     }
@@ -315,23 +314,28 @@ object GatewaySimSupport {
     }
 
     private fun readActiveProfiles(context: Context): List<GatewaySimProfile> {
-        val subscriptionManager = context.getSystemService(SubscriptionManager::class.java) ?: return emptyList()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.LOLLIPOP_MR1 || !hasSubscriptionPermission(context)) {
+            return emptyList()
+        }
+        val subscriptionManager = context.getSystemService(SUBSCRIPTION_SERVICE) ?: return emptyList()
         val infos = runCatching {
-            if (hasSubscriptionPermission(context)) {
-                subscriptionManager.activeSubscriptionInfoList.orEmpty()
-            } else {
-                emptyList()
-            }
-        }.getOrDefault(emptyList())
+            subscriptionManager.javaClass.getMethod("getActiveSubscriptionInfoList").invoke(subscriptionManager) as? List<*>
+        }.getOrNull().orEmpty()
 
-        return infos.map { info ->
-            val customNumber = readCustomPhoneNumber(context, info.simSlotIndex)
-            val systemNumber = readSystemPhoneNumber(context, subscriptionManager, info)
+        return infos.mapNotNull { info ->
+            if (info == null) return@mapNotNull null
+            val slotIndex = info.readIntMethod("getSimSlotIndex") ?: return@mapNotNull null
+            val subscriptionId = info.readIntMethod("getSubscriptionId")
+            val customNumber = readCustomPhoneNumber(context, slotIndex)
+            val systemNumber = readSystemPhoneNumber(context, subscriptionManager, info, subscriptionId)
             val effective = customNumber?.takeIf { it.isNotBlank() } ?: systemNumber?.takeIf { it.isNotBlank() }
+            val displayName = info.readStringMethod("getDisplayName")
+                ?.takeIf { it.isNotBlank() }
+                ?: "SIM ${slotIndex + 1}"
             GatewaySimProfile(
-                subscriptionId = info.subscriptionId,
-                slotIndex = info.simSlotIndex,
-                displayName = info.displayName?.toString()?.takeIf { it.isNotBlank() } ?: "SIM ${info.simSlotIndex + 1}",
+                subscriptionId = subscriptionId,
+                slotIndex = slotIndex,
+                displayName = displayName,
                 systemPhoneNumber = systemNumber,
                 customPhoneNumber = customNumber,
                 effectivePhoneNumber = effective,
@@ -350,22 +354,48 @@ object GatewaySimSupport {
     }
 
     @SuppressLint("MissingPermission")
-    private fun readSystemPhoneNumber(context: Context, subscriptionManager: SubscriptionManager, info: SubscriptionInfo): String? {
+    private fun readSystemPhoneNumber(context: Context, subscriptionManager: Any, info: Any, subscriptionId: Int?): String? {
         val fromSubscriptionManager = runCatching {
             when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU -> subscriptionManager.getPhoneNumber(info.subscriptionId)
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                    subscriptionId != null &&
+                    subscriptionId != INVALID_SUBSCRIPTION_ID ->
+                    subscriptionManager.javaClass
+                        .getMethod("getPhoneNumber", Int::class.javaPrimitiveType!!)
+                        .invoke(subscriptionManager, subscriptionId) as? String
                 else -> null
             }
         }.getOrNull()?.trim().takeIf { !it.isNullOrBlank() }
 
-        val fromInfo = info.number?.trim().takeIf { !it.isNullOrBlank() }
+        val fromInfo = info.readStringMethod("getNumber")?.trim().takeIf { !it.isNullOrBlank() }
         val fromTelephonyManager = runCatching {
-            context.getSystemService(TelephonyManager::class.java)
-                ?.createForSubscriptionId(info.subscriptionId)
-                ?.line1Number
+            val telephonyManager = context.getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+                ?: return@runCatching null
+            when {
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.N &&
+                    subscriptionId != null &&
+                    subscriptionId != INVALID_SUBSCRIPTION_ID ->
+                    telephonyManager.createForSubscriptionId(subscriptionId).line1Number
+                else -> telephonyManager.line1Number
+            }
         }.getOrNull()?.trim().takeIf { !it.isNullOrBlank() }
 
         return fromSubscriptionManager ?: fromInfo ?: fromTelephonyManager
+    }
+
+    private fun Any.readIntMethod(methodName: String): Int? {
+        return runCatching {
+            val method = javaClass.getMethod(methodName)
+            (method.invoke(this) as? Number)?.toInt()
+        }.getOrNull()
+    }
+
+    private fun Any.readStringMethod(methodName: String): String? {
+        return runCatching {
+            val method = javaClass.getMethod(methodName)
+            val value = method.invoke(this) ?: return@runCatching null
+            (value as? CharSequence)?.toString() ?: value.toString()
+        }.getOrNull()
     }
 }
 

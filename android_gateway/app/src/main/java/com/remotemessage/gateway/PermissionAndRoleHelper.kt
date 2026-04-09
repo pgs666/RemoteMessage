@@ -16,7 +16,7 @@ import androidx.core.content.ContextCompat
 object PermissionAndRoleHelper {
     fun isDefaultSmsApp(context: Context): Boolean {
         return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val roleManager = context.getSystemService(android.app.role.RoleManager::class.java)
+            val roleManager = context.getSystemService(Context.ROLE_SERVICE) as? android.app.role.RoleManager
             roleManager != null &&
                 roleManager.isRoleAvailable(android.app.role.RoleManager.ROLE_SMS) &&
                 roleManager.isRoleHeld(android.app.role.RoleManager.ROLE_SMS)
@@ -28,7 +28,7 @@ object PermissionAndRoleHelper {
     fun buildRequestDefaultSmsRoleIntent(activity: Activity): Intent? {
         if (isDefaultSmsApp(activity)) return null
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            val roleManager = activity.getSystemService(android.app.role.RoleManager::class.java)
+            val roleManager = activity.getSystemService(Context.ROLE_SERVICE) as? android.app.role.RoleManager
             if (roleManager != null && roleManager.isRoleAvailable(android.app.role.RoleManager.ROLE_SMS) && !roleManager.isRoleHeld(android.app.role.RoleManager.ROLE_SMS)) {
                 return roleManager.createRequestRoleIntent(android.app.role.RoleManager.ROLE_SMS)
             }

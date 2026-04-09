@@ -3,11 +3,13 @@ package com.remotemessage.gateway
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.os.Build
 import android.os.IBinder
-import android.telephony.SubscriptionManager
 import android.telephony.SmsManager
 
 class RespondViaMessageService : Service() {
+    private val invalidSubscriptionId = -1
+
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -41,11 +43,7 @@ class RespondViaMessageService : Service() {
         if (recipients.isEmpty()) return
 
         val resolvedSim = GatewaySimSupport.resolveForIntent(this, intent)
-        val smsManager = when (val subId = resolvedSim.subscriptionId) {
-            null -> SmsManager.getDefault()
-            SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
-            else -> SmsManager.getSmsManagerForSubscriptionId(subId)
-        }
+        val smsManager = smsManagerForSubscriptionId(resolvedSim.subscriptionId)
 
         recipients.forEach { phone ->
             val parts = smsManager.divideMessage(body)
@@ -55,5 +53,21 @@ class RespondViaMessageService : Service() {
                 smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
             }
         }
+    }
+
+    private fun smsManagerForSubscriptionId(subscriptionId: Int?): SmsManager {
+        if (subscriptionId == null || subscriptionId == invalidSubscriptionId) {
+            return SmsManager.getDefault()
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+            val specificManager = runCatching {
+                val method = SmsManager::class.java.getMethod("getSmsManagerForSubscriptionId", Int::class.javaPrimitiveType!!)
+                method.invoke(null, subscriptionId) as? SmsManager
+            }.getOrNull()
+            if (specificManager != null) {
+                return specificManager
+            }
+        }
+        return SmsManager.getDefault()
     }
 }
