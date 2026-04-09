@@ -131,21 +131,27 @@ jobs:
           ANDROID_CLIENT_KEY_ALIAS: ${{ secrets.ANDROID_CLIENT_KEY_ALIAS }}
           ANDROID_CLIENT_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_CLIENT_KEYSTORE_PASSWORD }}
           ANDROID_CLIENT_KEY_PASSWORD: ${{ secrets.ANDROID_CLIENT_KEY_PASSWORD }}
+          ANDROID_GATEWAY_KEYSTORE_BASE64: ${{ secrets.ANDROID_GATEWAY_KEYSTORE_BASE64 }}
+          ANDROID_GATEWAY_KEY_ALIAS: ${{ secrets.ANDROID_GATEWAY_KEY_ALIAS }}
+          ANDROID_GATEWAY_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_GATEWAY_KEYSTORE_PASSWORD }}
+          ANDROID_GATEWAY_KEY_PASSWORD: ${{ secrets.ANDROID_GATEWAY_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          for key in ANDROID_CLIENT_KEYSTORE_BASE64 ANDROID_CLIENT_KEY_ALIAS ANDROID_CLIENT_KEYSTORE_PASSWORD ANDROID_CLIENT_KEY_PASSWORD; do
-            if [ -z "${!key:-}" ]; then
-              echo "::error::Missing required secret: $key"
-              exit 1
-            fi
-          done
+          KEYSTORE_BASE64="${ANDROID_CLIENT_KEYSTORE_BASE64:-${ANDROID_GATEWAY_KEYSTORE_BASE64:-}}"
+          KEY_ALIAS="${ANDROID_CLIENT_KEY_ALIAS:-${ANDROID_GATEWAY_KEY_ALIAS:-}}"
+          KEYSTORE_PASSWORD="${ANDROID_CLIENT_KEYSTORE_PASSWORD:-${ANDROID_GATEWAY_KEYSTORE_PASSWORD:-}}"
+          KEY_PASSWORD="${ANDROID_CLIENT_KEY_PASSWORD:-${ANDROID_GATEWAY_KEY_PASSWORD:-}}"
+          if [ -z "${KEYSTORE_BASE64}" ] || [ -z "${KEY_ALIAS}" ] || [ -z "${KEYSTORE_PASSWORD}" ] || [ -z "${KEY_PASSWORD}" ]; then
+            echo "::error::Missing signing secrets. Set ANDROID_CLIENT_* (preferred) or ANDROID_GATEWAY_* as fallback."
+            exit 1
+          fi
 
           mkdir -p client/flutter_client_build/android/app
-          echo "$ANDROID_CLIENT_KEYSTORE_BASE64" | base64 -d > client/flutter_client_build/android/app/ci-signing.jks
+          echo "$KEYSTORE_BASE64" | base64 -d > client/flutter_client_build/android/app/ci-signing.jks
           cat > client/flutter_client_build/android/key.properties <<EOF
-          storePassword=${ANDROID_CLIENT_KEYSTORE_PASSWORD}
-          keyPassword=${ANDROID_CLIENT_KEY_PASSWORD}
-          keyAlias=${ANDROID_CLIENT_KEY_ALIAS}
+          storePassword=${KEYSTORE_PASSWORD}
+          keyPassword=${KEY_PASSWORD}
+          keyAlias=${KEY_ALIAS}
           storeFile=ci-signing.jks
           EOF
 
