@@ -203,6 +203,7 @@ object GatewayRuntime {
                 GatewayDebugLog.add(context, "Flush pending uploads: ${pending.size} item(s)")
 
                 val uploadedIds = ArrayList<Long>(pending.size)
+                val droppedIds = ArrayList<Long>(pending.size)
                 pending.forEach { item ->
                     runCatching {
                         uploadInboundSmsSync(
@@ -244,13 +245,26 @@ object GatewayRuntime {
                                 GatewayDebugLog.add(context, "Uploaded sms after server key refresh: id=${item.messageId ?: item.id}")
                             }.onFailure { retryError ->
                                 GatewayDebugLog.add(context, "Upload failed after key refresh: ${retryError.message}")
+                                if (isPermanentUploadFailure(retryError)) {
+                                    droppedIds += item.id
+                                    GatewayDebugLog.add(context, "Dropped invalid pending sms after retry: id=${item.messageId ?: item.id}, phone=${item.phone}")
+                                }
                             }
                         } else {
                             GatewayDebugLog.add(context, "Upload failed: ${firstError.message}")
+                            if (isPermanentUploadFailure(firstError)) {
+                                droppedIds += item.id
+                                GatewayDebugLog.add(context, "Dropped invalid pending sms: id=${item.messageId ?: item.id}, phone=${item.phone}")
+                            }
                         }
                     }
                 }
                 local.deletePending(uploadedIds)
+                local.deletePending(droppedIds)
+                // Avoid hot-looping the same permanently-invalid records in a single flush batch.
+                if (droppedIds.isNotEmpty()) {
+                    return
+                }
             }
         } finally {
             flushInProgress = false
@@ -565,6 +579,18 @@ object GatewayRuntime {
             message.contains("invalid encrypted payload") ||
             message.contains("oaep") ||
             message.contains("failed to decrypt")
+    }
+
+    private fun isPermanentUploadFailure(error: Throwable): Boolean {
+        val message = error.message?.lowercase() ?: return false
+        return message.contains("phone invalid") ||
+            message.contains("content too large") ||
+            message.contains("messageid too long") ||
+            message.contains("simslotindex invalid") ||
+            message.contains("simphonenumber invalid") ||
+            message.contains("simcount invalid") ||
+            message.contains("deviceid/encryptedpayloadbase64 required") ||
+            message.contains("deviceid too long")
     }
 
     private fun smsManagerForSubscriptionId(subscriptionId: Int?): SmsManager {
