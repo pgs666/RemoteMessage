@@ -148,29 +148,28 @@ jobs:
 
           mkdir -p client/flutter_client_build/android/app
           echo "$KEYSTORE_BASE64" | base64 -d > client/flutter_client_build/android/app/ci-signing.jks
-          cat > client/flutter_client_build/android/key.properties <<EOF
-          storePassword=${KEYSTORE_PASSWORD}
-          keyPassword=${KEY_PASSWORD}
-          keyAlias=${KEY_ALIAS}
-          storeFile=ci-signing.jks
-          EOF
+          {
+            echo "ANDROID_SIGNING_KEY_ALIAS=${KEY_ALIAS}"
+            echo "ANDROID_SIGNING_KEY_PASSWORD=${KEY_PASSWORD}"
+            echo "ANDROID_SIGNING_STORE_PASSWORD=${KEYSTORE_PASSWORD}"
+            echo "ANDROID_SIGNING_STORE_FILE=ci-signing.jks"
+          } >> "$GITHUB_ENV"
 
           if [ -f client/flutter_client_build/android/app/build.gradle.kts ]; then
             cat >> client/flutter_client_build/android/app/build.gradle.kts <<'EOF'
 
-          val releaseKeystoreProperties = Properties()
-          val releaseKeystoreFile = rootProject.file("key.properties")
-          releaseKeystoreFile.inputStream().use { stream ->
-              releaseKeystoreProperties.load(stream)
-          }
+          val releaseSigningKeyAlias = System.getenv("ANDROID_SIGNING_KEY_ALIAS")
+          val releaseSigningKeyPassword = System.getenv("ANDROID_SIGNING_KEY_PASSWORD")
+          val releaseSigningStorePassword = System.getenv("ANDROID_SIGNING_STORE_PASSWORD")
+          val releaseSigningStoreFile = System.getenv("ANDROID_SIGNING_STORE_FILE") ?: "ci-signing.jks"
 
           android {
               signingConfigs {
                   create("release") {
-                      keyAlias = releaseKeystoreProperties["keyAlias"] as String
-                      keyPassword = releaseKeystoreProperties["keyPassword"] as String
-                      storeFile = file(releaseKeystoreProperties["storeFile"] as String)
-                      storePassword = releaseKeystoreProperties["storePassword"] as String
+                      keyAlias = releaseSigningKeyAlias
+                      keyPassword = releaseSigningKeyPassword
+                      storeFile = file(releaseSigningStoreFile)
+                      storePassword = releaseSigningStorePassword
                   }
               }
               buildTypes {
@@ -183,17 +182,18 @@ jobs:
           elif [ -f client/flutter_client_build/android/app/build.gradle ]; then
             cat >> client/flutter_client_build/android/app/build.gradle <<'EOF'
 
-          def releaseKeystoreProperties = new Properties()
-          def releaseKeystorePropertiesFile = rootProject.file('key.properties')
-          releaseKeystoreProperties.load(new FileInputStream(releaseKeystorePropertiesFile))
+          def releaseSigningKeyAlias = System.getenv('ANDROID_SIGNING_KEY_ALIAS')
+          def releaseSigningKeyPassword = System.getenv('ANDROID_SIGNING_KEY_PASSWORD')
+          def releaseSigningStorePassword = System.getenv('ANDROID_SIGNING_STORE_PASSWORD')
+          def releaseSigningStoreFile = System.getenv('ANDROID_SIGNING_STORE_FILE') ?: 'ci-signing.jks'
 
           android {
               signingConfigs {
                   release {
-                      keyAlias releaseKeystoreProperties['keyAlias']
-                      keyPassword releaseKeystoreProperties['keyPassword']
-                      storeFile file(releaseKeystoreProperties['storeFile'])
-                      storePassword releaseKeystoreProperties['storePassword']
+                      keyAlias releaseSigningKeyAlias
+                      keyPassword releaseSigningKeyPassword
+                      storeFile file(releaseSigningStoreFile)
+                      storePassword releaseSigningStorePassword
                   }
               }
               buildTypes {
