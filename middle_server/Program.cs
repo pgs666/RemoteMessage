@@ -3,6 +3,7 @@ using System.Text.Json;
 
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
 var serverLogPath = Path.Combine(RuntimeLayout.RuntimeDirectory, "server.log");
+const long DefaultGatewayOnlineWindowMs = 120_000;
 
 var serverSettings = new ServerRuntimeSettings();
 var httpsSettings = new HttpsCertificateSettings();
@@ -105,6 +106,7 @@ app.MapPost("/api/gateway/sim-state", (UpsertGatewaySimStateRequest req, SqliteR
     }
 
     repo.ReplaceGatewaySimProfiles(req.DeviceId, req.Profiles);
+    repo.TouchGatewayLastSeen(req.DeviceId);
     return Results.Ok(new { ok = true, count = req.Profiles.Count });
 });
 
@@ -114,6 +116,8 @@ app.MapPost("/api/gateway/sms/upload", (UploadSmsRequest req, CryptoState crypto
     {
         return error;
     }
+
+    repo.TouchGatewayLastSeen(req.DeviceId);
 
     try
     {
@@ -171,10 +175,25 @@ app.MapGet("/api/client/inbox", (long? sinceTs, int? limit, string? phone, Sqlit
     return Results.Ok(list);
 });
 
-app.MapGet("/api/client/gateways", (int? limit, SqliteRepository repo) =>
+app.MapGet("/api/client/gateways", (int? limit, long? onlineWindowMs, SqliteRepository repo) =>
 {
-    var list = repo.ListGateways(limit ?? 200);
+    var normalizedWindowMs = Math.Clamp(onlineWindowMs ?? DefaultGatewayOnlineWindowMs, 5_000, 86_400_000);
+    var list = repo.ListGateways(limit ?? 200, normalizedWindowMs);
     return Results.Ok(list);
+});
+
+app.MapGet("/api/client/gateways/{deviceId}/online", (string deviceId, long? onlineWindowMs, SqliteRepository repo) =>
+{
+    if (string.IsNullOrWhiteSpace(deviceId) || deviceId.Length > 128)
+    {
+        return Results.BadRequest("deviceId required");
+    }
+
+    var normalizedWindowMs = Math.Clamp(onlineWindowMs ?? DefaultGatewayOnlineWindowMs, 5_000, 86_400_000);
+    var status = repo.GetGatewayOnlineStatus(deviceId, normalizedWindowMs);
+    return status is null
+        ? Results.NotFound("gateway not found")
+        : Results.Ok(status);
 });
 
 app.MapGet("/api/client/device-sims", (string deviceId, SqliteRepository repo) =>
@@ -263,6 +282,12 @@ app.MapPost("/api/client/send", (SendSmsRequest req, GatewayRegistry registry, S
 
 app.MapGet("/api/gateway/pull", (string deviceId, SqliteRepository repo) =>
 {
+    if (string.IsNullOrWhiteSpace(deviceId) || deviceId.Length > 128)
+    {
+        return Results.BadRequest("deviceId required");
+    }
+
+    repo.TouchGatewayLastSeen(deviceId);
     var found = repo.LeaseNextOutbound(deviceId);
     if (found is null)
     {
@@ -279,6 +304,7 @@ app.MapPost("/api/gateway/pull/ack", (AckOutboundRequest req, SqliteRepository r
         return error;
     }
 
+    repo.TouchGatewayLastSeen(req.DeviceId);
     var acked = repo.AckOutbound(req.DeviceId, req.OutboxId, req.AckToken);
     return acked
         ? Results.Ok(new { ok = true })
@@ -292,6 +318,7 @@ app.MapPost("/api/gateway/outbound-status", (OutboundStatusUpdateRequest req, Sq
         return error;
     }
 
+    repo.TouchGatewayLastSeen(req.DeviceId);
     var status = ApiSupport.NormalizeSendStatus(req.Status);
     if (status is null)
     {

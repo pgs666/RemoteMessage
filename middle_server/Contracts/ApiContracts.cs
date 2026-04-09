@@ -59,9 +59,18 @@ public record GatewaySimProfileRecord(string DeviceId, int SlotIndex, int? Subsc
 public record GatewaySummaryRecord(
     string DeviceId,
     long UpdatedAt,
+    long? LastSeenAt,
+    bool IsOnline,
     int SimProfileCount,
     int PendingOutboxCount,
     long? LastMessageTimestamp
+);
+public record GatewayOnlineStatusRecord(
+    string DeviceId,
+    long? LastSeenAt,
+    bool IsOnline,
+    long OnlineWindowMs,
+    long CheckedAt
 );
 
 public sealed class PendingOutbound

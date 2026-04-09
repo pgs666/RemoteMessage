@@ -3,7 +3,7 @@ using Microsoft.Data.Sqlite;
 public sealed class SqliteRepository
 {
     private const long OutboxLeaseTimeoutMs = 60_000;
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
     private readonly string _connectionString;
     public string DatabaseFilePath { get; }
 
@@ -148,15 +148,29 @@ VALUES($deviceId, $payload, $ts);";
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
-INSERT INTO gateways(device_id, public_key_pem, updated_at)
-VALUES($deviceId, $pem, $ts)
+INSERT INTO gateways(device_id, public_key_pem, updated_at, last_seen_at)
+VALUES($deviceId, $pem, $ts, $ts)
 ON CONFLICT(device_id) DO UPDATE SET
   public_key_pem = excluded.public_key_pem,
-  updated_at = excluded.updated_at;";
+  updated_at = excluded.updated_at,
+  last_seen_at = excluded.last_seen_at;";
         cmd.Parameters.AddWithValue("$deviceId", deviceId);
         cmd.Parameters.AddWithValue("$pem", publicKeyPem);
         cmd.Parameters.AddWithValue("$ts", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         cmd.ExecuteNonQuery();
+    }
+
+    public bool TouchGatewayLastSeen(string deviceId)
+    {
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+UPDATE gateways
+SET last_seen_at = $ts
+WHERE device_id = $deviceId;";
+        cmd.Parameters.AddWithValue("$deviceId", deviceId);
+        cmd.Parameters.AddWithValue("$ts", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+        return cmd.ExecuteNonQuery() > 0;
     }
 
     public string? GetGatewayPublicKey(string deviceId)
@@ -169,15 +183,18 @@ ON CONFLICT(device_id) DO UPDATE SET
         return v?.ToString();
     }
 
-    public IReadOnlyList<GatewaySummaryRecord> ListGateways(int limit)
+    public IReadOnlyList<GatewaySummaryRecord> ListGateways(int limit, long onlineWindowMs)
     {
         limit = Math.Clamp(limit, 1, 2000);
+        onlineWindowMs = Math.Clamp(onlineWindowMs, 5_000, 86_400_000);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         using var conn = Open();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
 SELECT
     g.device_id,
     g.updated_at,
+    g.last_seen_at,
     COALESCE((
         SELECT COUNT(1)
         FROM gateway_sim_profiles s
@@ -202,16 +219,46 @@ LIMIT $limit;";
         using var reader = cmd.ExecuteReader();
         while (reader.Read())
         {
+            var lastSeenAt = reader.IsDBNull(2) ? null : reader.GetInt64(2);
+            var isOnline = lastSeenAt.HasValue && now - lastSeenAt.Value <= onlineWindowMs;
             list.Add(new GatewaySummaryRecord(
                 DeviceId: reader.GetString(0),
                 UpdatedAt: reader.IsDBNull(1) ? 0 : reader.GetInt64(1),
-                SimProfileCount: reader.IsDBNull(2) ? 0 : reader.GetInt32(2),
-                PendingOutboxCount: reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
-                LastMessageTimestamp: reader.IsDBNull(4) ? null : reader.GetInt64(4)
+                LastSeenAt: lastSeenAt,
+                IsOnline: isOnline,
+                SimProfileCount: reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
+                PendingOutboxCount: reader.IsDBNull(4) ? 0 : reader.GetInt32(4),
+                LastMessageTimestamp: reader.IsDBNull(5) ? null : reader.GetInt64(5)
             ));
         }
 
         return list;
+    }
+
+    public GatewayOnlineStatusRecord? GetGatewayOnlineStatus(string deviceId, long onlineWindowMs)
+    {
+        onlineWindowMs = Math.Clamp(onlineWindowMs, 5_000, 86_400_000);
+        var checkedAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT last_seen_at FROM gateways WHERE device_id = $deviceId LIMIT 1;";
+        cmd.Parameters.AddWithValue("$deviceId", deviceId);
+
+        using var reader = cmd.ExecuteReader();
+        if (!reader.Read())
+        {
+            return null;
+        }
+
+        var lastSeenAt = reader.IsDBNull(0) ? null : reader.GetInt64(0);
+        var isOnline = lastSeenAt.HasValue && checkedAt - lastSeenAt.Value <= onlineWindowMs;
+        return new GatewayOnlineStatusRecord(
+            DeviceId: deviceId,
+            LastSeenAt: lastSeenAt,
+            IsOnline: isOnline,
+            OnlineWindowMs: onlineWindowMs,
+            CheckedAt: checkedAt
+        );
     }
 
     public void ReplaceGatewaySimProfiles(string deviceId, IReadOnlyList<GatewaySimProfilePayload> profiles)
@@ -558,7 +605,8 @@ CREATE TABLE IF NOT EXISTS pinned_conversations(
 CREATE TABLE IF NOT EXISTS gateways(
     device_id TEXT PRIMARY KEY,
     public_key_pem TEXT NOT NULL,
-    updated_at INTEGER NOT NULL
+    updated_at INTEGER NOT NULL,
+    last_seen_at INTEGER
 );
 
 CREATE TABLE IF NOT EXISTS gateway_sim_profiles(
@@ -606,6 +654,9 @@ CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
         TryExecuteNonQuery(conn, "ALTER TABLE outbox ADD COLUMN lease_token TEXT;");
         TryExecuteNonQuery(conn, "ALTER TABLE outbox ADD COLUMN leased_at INTEGER;");
         TryExecuteNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_outbox_device_lease ON outbox(device_id, leased_at);");
+        TryExecuteNonQuery(conn, "ALTER TABLE gateways ADD COLUMN last_seen_at INTEGER;");
+        TryExecuteNonQuery(conn, "UPDATE gateways SET last_seen_at = updated_at WHERE last_seen_at IS NULL OR last_seen_at <= 0;");
+        TryExecuteNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_gateways_last_seen_at ON gateways(last_seen_at);");
     }
 
     private void TryExecuteNonQuery(SqliteConnection conn, string sql)
