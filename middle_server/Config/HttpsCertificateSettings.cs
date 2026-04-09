@@ -22,9 +22,19 @@ public sealed class HttpsCertificateSettings
     {
         if (File.Exists(PfxFilePath))
         {
-            var existing = new X509Certificate2(PfxFilePath, string.Empty, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
-            EnsureCertificateFile(existing);
-            return existing;
+            try
+            {
+                var existingBytes = File.ReadAllBytes(PfxFilePath);
+                var existing = LoadCertificateFromPfxBytes(existingBytes);
+                EnsureCertificateFile(existing);
+                return existing;
+            }
+            catch (CryptographicException)
+            {
+                // If the current account cannot access previously persisted key material,
+                // regenerate cert files in place to keep startup self-healing.
+                TryDeleteFile(PfxFilePath);
+            }
         }
 
         using var rsa = RSA.Create(2048);
@@ -51,14 +61,63 @@ public sealed class HttpsCertificateSettings
         req.CertificateExtensions.Add(san.Build());
 
         var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddYears(10));
-        var exportable = new X509Certificate2(cert.Export(X509ContentType.Pfx), string.Empty, X509KeyStorageFlags.Exportable | X509KeyStorageFlags.MachineKeySet);
+        var exportable = LoadCertificateFromPfxBytes(cert.Export(X509ContentType.Pfx));
         File.WriteAllBytes(PfxFilePath, exportable.Export(X509ContentType.Pfx));
         EnsureCertificateFile(exportable);
         return exportable;
     }
 
+    private static X509Certificate2 LoadCertificateFromPfxBytes(byte[] pfxBytes)
+    {
+        CryptographicException? lastError = null;
+        foreach (var flags in PreferredKeyStorageFlags())
+        {
+            try
+            {
+                return new X509Certificate2(pfxBytes, string.Empty, flags);
+            }
+            catch (CryptographicException ex)
+            {
+                lastError = ex;
+            }
+        }
+
+        throw lastError ?? new CryptographicException("Unable to load PFX certificate.");
+    }
+
+    private static IEnumerable<X509KeyStorageFlags> PreferredKeyStorageFlags()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            yield return X509KeyStorageFlags.Exportable | X509KeyStorageFlags.UserKeySet | X509KeyStorageFlags.PersistKeySet;
+            yield return X509KeyStorageFlags.Exportable | X509KeyStorageFlags.UserKeySet;
+            yield return X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet;
+            yield return X509KeyStorageFlags.EphemeralKeySet;
+            yield break;
+        }
+
+        yield return X509KeyStorageFlags.Exportable | X509KeyStorageFlags.EphemeralKeySet;
+        yield return X509KeyStorageFlags.EphemeralKeySet;
+        yield return X509KeyStorageFlags.Exportable;
+    }
+
     private void EnsureCertificateFile(X509Certificate2 certificate)
     {
         File.WriteAllText(CerFilePath, certificate.ExportCertificatePem(), new UTF8Encoding(false));
+    }
+
+    private static void TryDeleteFile(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+            }
+        }
+        catch
+        {
+            // Ignore cleanup failure; follow-up creation will surface any real write issues.
+        }
     }
 }
