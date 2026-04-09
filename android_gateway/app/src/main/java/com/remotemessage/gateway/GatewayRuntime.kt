@@ -54,7 +54,7 @@ object GatewayRuntime {
     private const val KEY_PRIVATE = "private_key"
     private const val KEYSTORE_ALIAS = "remote_message_gateway_rsa"
     private const val HISTORY_LAST_SYNC_TS_KEY = "history_last_sync_ts"
-    private const val SERVER_PUBLIC_KEY_CACHE_MS = 10 * 60 * 1000L
+    private const val SERVER_PUBLIC_KEY_CACHE_MS = 60 * 1000L
 
     @Volatile
     private var cachedServerPublicPem: String? = null
@@ -195,7 +195,7 @@ object GatewayRuntime {
 
         val local = getDb(context)
         try {
-            val serverPublicPem = fetchServerPublicKey(context, cfg)
+            var serverPublicPem = fetchServerPublicKey(context, cfg)
             repeat(20) {
                 val pending = local.listPending(200)
                 if (pending.isEmpty()) return
@@ -220,6 +220,34 @@ object GatewayRuntime {
                         )
                         uploadedIds += item.id
                         GatewayDebugLog.add(context, "Uploaded sms: id=${item.messageId ?: item.id}, slot=${item.simSlotIndex ?: -1}, phone=${item.phone}")
+                    }.onFailure { firstError ->
+                        val shouldRetry = shouldRefreshServerPublicKey(firstError)
+                        if (shouldRetry) {
+                            runCatching {
+                                GatewayDebugLog.add(context, "Upload failed with cached server key, refreshing key and retrying once")
+                                invalidateServerPublicKeyCache(cfg.serverBaseUrl)
+                                serverPublicPem = fetchServerPublicKey(context, cfg)
+                                uploadInboundSmsSync(
+                                    context = context,
+                                    cfg = cfg,
+                                    phone = item.phone,
+                                    content = item.content,
+                                    timestamp = item.timestamp,
+                                    direction = item.direction,
+                                    messageId = item.messageId,
+                                    simSlotIndex = item.simSlotIndex,
+                                    simPhoneNumber = item.simPhoneNumber,
+                                    simCount = item.simCount,
+                                    serverPublicPem = serverPublicPem
+                                )
+                                uploadedIds += item.id
+                                GatewayDebugLog.add(context, "Uploaded sms after server key refresh: id=${item.messageId ?: item.id}")
+                            }.onFailure { retryError ->
+                                GatewayDebugLog.add(context, "Upload failed after key refresh: ${retryError.message}")
+                            }
+                        } else {
+                            GatewayDebugLog.add(context, "Upload failed: ${firstError.message}")
+                        }
                     }
                 }
                 local.deletePending(uploadedIds)
@@ -520,6 +548,23 @@ object GatewayRuntime {
                 cachedServerPublicPemAt = now
             }
         }
+    }
+
+    private fun invalidateServerPublicKeyCache(baseUrl: String? = null) {
+        if (baseUrl != null && cachedServerBaseUrl != baseUrl) {
+            return
+        }
+        cachedServerPublicPem = null
+        cachedServerBaseUrl = null
+        cachedServerPublicPemAt = 0L
+    }
+
+    private fun shouldRefreshServerPublicKey(error: Throwable): Boolean {
+        val message = error.message?.lowercase() ?: return false
+        return message.contains("upload failed: 400") ||
+            message.contains("invalid encrypted payload") ||
+            message.contains("oaep") ||
+            message.contains("failed to decrypt")
     }
 
     private fun smsManagerForSubscriptionId(subscriptionId: Int?): SmsManager {
