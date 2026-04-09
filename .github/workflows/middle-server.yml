@@ -11,7 +11,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        rid: [linux-x64, linux-arm64, windows-x64, windows-arm64]
+        include:
+          - rid: linux-x64
+            output_id: linux-x64
+            is_windows: false
+          - rid: linux-arm64
+            output_id: linux-arm64
+            is_windows: false
+          - rid: win-x64
+            output_id: windows-x64
+            is_windows: true
+          - rid: win-arm64
+            output_id: windows-arm64
+            is_windows: true
 
     steps:
       - name: Checkout
@@ -37,20 +49,20 @@ jobs:
           /p:EnableCompressionInSingleFile=true
           /p:PublishTrimmed=false
           /p:DebugType=embedded
-          -o artifacts/middle-server/${{ matrix.rid }}
+          -o artifacts/middle-server/${{ matrix.output_id }}
 
       - name: Normalize single-file output (${{ matrix.rid }})
         shell: bash
         run: |
           set -euo pipefail
-          out_dir="artifacts/middle-server/${{ matrix.rid }}"
+          out_dir="artifacts/middle-server/${{ matrix.output_id }}"
 
-          if [[ "${{ matrix.rid }}" == windows-* ]]; then
+          if [[ "${{ matrix.is_windows }}" == "true" ]]; then
             source_file="$out_dir/RemoteMessage.MiddleServer.exe"
-            target_file="$out_dir/RemoteMessageServer-${{ matrix.rid }}.exe"
+            target_file="$out_dir/RemoteMessageServer-${{ matrix.output_id }}.exe"
           else
             source_file="$out_dir/RemoteMessage.MiddleServer"
-            target_file="$out_dir/RemoteMessageServer-${{ matrix.rid }}"
+            target_file="$out_dir/RemoteMessageServer-${{ matrix.output_id }}"
           fi
 
           if [[ ! -f "$source_file" ]]; then
@@ -71,5 +83,5 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: middle-server-${{ matrix.rid }}
-          path: artifacts/middle-server/${{ matrix.rid }}
+          name: middle-server-${{ matrix.output_id }}
+          path: artifacts/middle-server/${{ matrix.output_id }}
