@@ -86,7 +86,7 @@ public static class OnboardingQrBootstrap
     {
         using var generator = new QRCodeGenerator();
         using var data = generator.CreateQrCode(payload, QRCodeGenerator.ECCLevel.Q);
-        var asciiQr = new ASCIIQRCode(data);
+        var asciiQr = new AsciiQRCode(data);
         return asciiQr.GetGraphic(1, "##", "  ", true);
     }
 

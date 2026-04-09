@@ -1,4 +1,4 @@
-package cn.ac.studio.rmg
+﻿package cn.ac.studio.rmg
 
 import android.content.Context
 import fi.iki.elonen.NanoHTTPD
@@ -26,16 +26,15 @@ class GatewayWebUiServer(
         }
 
         val cfg = readConfig()
-        val isZh = session.headers["accept-language"]?.contains("zh", ignoreCase = true) == true
-        val title = if (isZh) "RemoteMessage 网关" else "RemoteMessage Gateway"
-        val serverLabel = if (isZh) "服务�? else "Server"
-        val deviceLabel = if (isZh) "设备" else "Device"
-        val simLabel = if (isZh) "SIM 信息" else "SIM Info"
-        val registerText = if (isZh) "注册" else "Register"
-        val pollText = if (isZh) "轮询一�? else "Poll Once"
-        val syncText = if (isZh) "同步历史短信" else "Sync History"
-        val flushText = if (isZh) "补传待发送队�? else "Flush Pending"
-        val simSummary = GatewaySimSupport.buildSummaryText(appContext, isZh).replace("\n", "<br/>")
+        val title = "RemoteMessage Gateway"
+        val serverLabel = "Server"
+        val deviceLabel = "Device"
+        val simLabel = "SIM Info"
+        val registerText = "Register"
+        val pollText = "Poll Once"
+        val syncText = "Sync History"
+        val flushText = "Flush Pending"
+        val simSummary = GatewaySimSupport.buildSummaryText(appContext, isZh = false).replace("\n", "<br/>")
         val html = """
             <html><head><meta name='viewport' content='width=device-width,initial-scale=1' />
             <title>$title</title></head>
