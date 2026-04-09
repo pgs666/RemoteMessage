@@ -18,5 +18,6 @@
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.4" />
+    <PackageReference Include="QRCoder" Version="1.7.1" />
   </ItemGroup>
 </Project>

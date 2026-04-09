@@ -1,4 +1,4 @@
-package com.remotemessage.gateway
+package cn.ac.studio.rmg
 
 import android.content.ContentValues
 import android.content.Context

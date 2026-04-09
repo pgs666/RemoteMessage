@@ -5,7 +5,7 @@ import 'package:flutter/services.dart';
 import 'app_data.dart';
 
 class AndroidLauncherIconService {
-  static const MethodChannel _channel = MethodChannel('com.remotemessage.client/icon_mode');
+  static const MethodChannel _channel = MethodChannel('cn.ac.studio.rmc/icon_mode');
 
   static Future<void> applyMode(AndroidLauncherIconMode mode) async {
     if (!Platform.isAndroid) return;

@@ -9,7 +9,8 @@ from pathlib import Path
 
 APP_NAME_EN = "RemoteMessage"
 APP_NAME_ZH = "RemoteMessage"
-ANDROID_CHANNEL = "com.remotemessage.client/icon_mode"
+ANDROID_CHANNEL = "cn.ac.studio.rmc/icon_mode"
+ANDROID_APPLICATION_ID = "cn.ac.studio.rmc"
 ANDROID_NS = "http://schemas.android.com/apk/res/android"
 
 
@@ -36,9 +37,41 @@ def configure_android(app_dir: Path) -> None:
     if not android_main.exists():
         return
 
+    patch_android_package_id(app_dir)
     write_android_strings(android_main)
     patch_android_manifest(android_main / "AndroidManifest.xml")
     patch_android_main_activity(android_main)
+
+
+def patch_android_package_id(app_dir: Path) -> None:
+    gradle_groovy = app_dir / "android" / "app" / "build.gradle"
+    gradle_kts = app_dir / "android" / "app" / "build.gradle.kts"
+
+    for gradle_file in [gradle_groovy, gradle_kts]:
+        if not gradle_file.exists():
+            continue
+        text = gradle_file.read_text(encoding="utf-8")
+        namespace_replacement = (
+            f'namespace = "{ANDROID_APPLICATION_ID}"'
+            if gradle_file.suffix == ".kts"
+            else f'namespace "{ANDROID_APPLICATION_ID}"'
+        )
+        app_id_replacement = (
+            f'applicationId = "{ANDROID_APPLICATION_ID}"'
+            if gradle_file.suffix == ".kts"
+            else f'applicationId "{ANDROID_APPLICATION_ID}"'
+        )
+        text = re.sub(
+            r'namespace\s*[= ]\s*["\'][^"\']*["\']',
+            namespace_replacement,
+            text,
+        )
+        text = re.sub(
+            r'applicationId\s*[= ]\s*["\'][^"\']*["\']',
+            app_id_replacement,
+            text,
+        )
+        gradle_file.write_text(text, encoding="utf-8")
 
 
 def write_android_strings(android_main: Path) -> None:
@@ -160,17 +193,16 @@ def patch_android_main_activity(android_main: Path) -> None:
     if not candidates:
         return
 
-    main_activity = candidates[0]
-    source = main_activity.read_text(encoding="utf-8")
-    package_name = read_package_name(source)
-    main_activity.write_text(build_main_activity_kotlin(package_name), encoding="utf-8")
+    kotlin_root = android_main / "kotlin"
+    kotlin_root.mkdir(parents=True, exist_ok=True)
+    target_dir = kotlin_root / Path(*ANDROID_APPLICATION_ID.split("."))
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_main_activity = target_dir / "MainActivity.kt"
+    target_main_activity.write_text(build_main_activity_kotlin(ANDROID_APPLICATION_ID), encoding="utf-8")
 
-
-def read_package_name(content: str) -> str:
-    match = re.search(r"^\s*package\s+([A-Za-z0-9_.]+)\s*$", content, flags=re.MULTILINE)
-    if not match:
-        raise ValueError("Cannot detect Android package name from MainActivity.kt")
-    return match.group(1)
+    for source_file in candidates:
+        if source_file.resolve() != target_main_activity.resolve():
+            source_file.unlink(missing_ok=True)
 
 
 def build_main_activity_kotlin(package_name: str) -> str:
@@ -256,6 +288,9 @@ def configure_ios(app_dir: Path) -> None:
 
     data["CFBundleDisplayName"] = APP_NAME_EN
     data["CFBundleName"] = APP_NAME_EN
+    data.setdefault("NSCameraUsageDescription", "Use camera to scan onboarding QR code.")
+    data.setdefault("NSPhotoLibraryUsageDescription", "Select QR code image for onboarding.")
+    data.setdefault("NSPhotoLibraryAddUsageDescription", "Save exported files when needed.")
 
     with info_plist.open("wb") as f:
         plistlib.dump(data, f, sort_keys=False)

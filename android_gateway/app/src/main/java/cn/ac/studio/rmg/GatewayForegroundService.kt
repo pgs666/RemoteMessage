@@ -1,4 +1,4 @@
-package com.remotemessage.gateway
+package cn.ac.studio.rmg
 
 import android.app.Notification
 import android.app.NotificationChannel
@@ -162,8 +162,8 @@ class GatewayForegroundService : Service() {
     }
 
     companion object {
-        private const val ACTION_START = "com.remotemessage.gateway.action.START_SYNC"
-        private const val ACTION_STOP = "com.remotemessage.gateway.action.STOP_SYNC"
+        private const val ACTION_START = "cn.ac.studio.rmg.action.START_SYNC"
+        private const val ACTION_STOP = "cn.ac.studio.rmg.action.STOP_SYNC"
         private const val NOTIFICATION_ID = 10010
         private const val CHANNEL_ID = "gateway_foreground_sync"
         private const val SYNC_INTERVAL_MS = 5_000L

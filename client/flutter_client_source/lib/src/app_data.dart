@@ -180,8 +180,8 @@ enum AndroidLauncherIconMode {
 }
 
 class AppSettingsStore {
-  String serverBaseUrl = 'https://127.0.0.1:5001';
-  String deviceId = 'android-arm64-gateway';
+  String serverBaseUrl = '';
+  String deviceId = '';
   String password = '';
   ThemeMode themeMode = ThemeMode.system;
   AndroidLauncherIconMode androidLauncherIconMode = AndroidLauncherIconMode.defaultMode;
@@ -363,17 +363,13 @@ class AppSettingsStore {
     final count = (countRow.first['c'] as num?)?.toInt() ?? 0;
     if (count > 0) return;
 
-    final legacyServer = _readSetting(db, 'serverBaseUrl') ?? serverBaseUrl;
-    final legacyDevice = _readSetting(db, 'deviceId') ?? deviceId;
-    final legacyPassword = _readSetting(db, 'password') ?? password;
     final now = DateTime.now().millisecondsSinceEpoch;
 
     db.execute(
       'INSERT OR REPLACE INTO profiles(id, name, server_base_url, device_id, password, updated_at) VALUES(?, ?, ?, ?, ?, ?);',
-      ['default', '默认配置', legacyServer, legacyDevice, legacyPassword, now],
+      ['default', '默认配置', '', '', '', now],
     );
     _writeSetting(db, 'activeProfileId', 'default');
-    _writeSetting(db, 'password', '');
   }
 
   Future<List<AppServerProfile>> _readProfiles(sqlite.Database db) async {
@@ -404,32 +400,14 @@ class AppSettingsStore {
     }
 
     final result = <AppServerProfile>[];
-    final legacyIdsToClear = <String>{};
 
     for (final profile in source) {
       final securePassword = await _readProfilePassword(profile.id);
       if (securePassword != null && securePassword.isNotEmpty) {
-        if (profile.password.trim().isNotEmpty) {
-          legacyIdsToClear.add(profile.id);
-        }
         result.add(profile.copyWith(password: securePassword));
         continue;
       }
-
-      final legacyPassword = profile.password.trim();
-      if (legacyPassword.isNotEmpty) {
-        final persisted = await _persistProfilePassword(profile.id, legacyPassword);
-        if (persisted) {
-          legacyIdsToClear.add(profile.id);
-        }
-      }
-      result.add(profile.copyWith(password: legacyPassword));
-    }
-
-    if (legacyIdsToClear.isNotEmpty) {
-      for (final id in legacyIdsToClear) {
-        db.execute('UPDATE profiles SET password = ? WHERE id = ?;', ['', id]);
-      }
+      result.add(profile.copyWith(password: profile.password.trim()));
     }
 
     return result;

@@ -542,7 +542,6 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
       final secret = (password ?? '').trim();
       if (secret.isNotEmpty) {
         req.headers.set('X-Client-Token', secret);
-        req.headers.set('X-Password', secret);
       }
       final resp = await req.close();
       final body = await utf8.decodeStream(resp);
@@ -563,7 +562,6 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
       final secret = (password ?? '').trim();
       if (secret.isNotEmpty) {
         req.headers.set('X-Client-Token', secret);
-        req.headers.set('X-Password', secret);
       }
       req.add(utf8.encode(jsonEncode(data)));
       final resp = await req.close();

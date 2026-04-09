@@ -1,4 +1,4 @@
-package com.remotemessage.gateway
+package cn.ac.studio.rmg
 
 import android.app.AlertDialog
 import android.content.Context
@@ -20,6 +20,8 @@ import androidx.activity.result.contract.ActivityResultContracts.StartActivityFo
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import fi.iki.elonen.NanoHTTPD
 
 class MainActivity : ComponentActivity() {
@@ -31,6 +33,12 @@ class MainActivity : ComponentActivity() {
     private val syncAnimHandler = Handler(Looper.getMainLooper())
     private var syncAnimRunnable: Runnable? = null
     private lateinit var permissionPref: SharedPreferences
+
+    private data class OnboardingQrPayload(
+        val serverBaseUrl: String,
+        val clientToken: String,
+        val gatewayToken: String
+    )
 
     private val requestSmsRoleLauncher = registerForActivityResult(StartActivityForResult()) {
         statusTextView?.text = if (PermissionAndRoleHelper.isDefaultSmsApp(this)) {
@@ -102,68 +110,87 @@ class MainActivity : ComponentActivity() {
         val btnTestLocalSms = findViewById<Button>(R.id.btnTestLocalSms)
         val btnFlushPending = findViewById<Button>(R.id.btnFlushPending)
         val btnImportCert = findViewById<Button>(R.id.btnImportCert)
+        val btnScanOnboarding = findViewById<Button>(R.id.btnScanOnboarding)
         val btnPermissionTools = findViewById<Button>(R.id.btnPermissionTools)
         val btnOpenLogPage = findViewById<Button>(R.id.btnOpenLogPage)
         val btnGatewayDataTools = findViewById<Button>(R.id.btnGatewayDataTools)
         statusTextView = textStatus
         syncProgressBar = progressSync
 
-        editServer.setText(pref.getString("server_base", "https://10.0.2.2:5001") ?: "")
-        editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
+        val defaultDeviceId = defaultGatewayDeviceId()
+        val storedDeviceId = pref.getString("device_id", null)?.trim().orEmpty()
+        editServer.setText(pref.getString("server_base", "") ?: "")
+        editDeviceId.setText(if (storedDeviceId.isNotEmpty()) storedDeviceId else defaultDeviceId)
         editApiKey.setText(GatewaySecretStore.loadPassword(this) ?: "")
         editWebUiPort.setText(pref.getString("webui_port", "8088") ?: "8088")
         textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
 
         RuntimeConfig.password = GatewaySecretStore.loadPassword(this)
 
+        val scanOnboardingLauncher = registerForActivityResult(ScanContract()) { result ->
+            val text = result.contents?.trim()
+            if (text.isNullOrEmpty()) {
+                return@registerForActivityResult
+            }
+
+            val payload = parseOnboardingPayload(text)
+            if (payload == null) {
+                textStatus.text = getString(R.string.status_onboarding_invalid)
+                return@registerForActivityResult
+            }
+
+            editServer.setText(payload.serverBaseUrl)
+            editApiKey.setText(payload.gatewayToken)
+            if (editDeviceId.text.toString().trim().isEmpty()) {
+                editDeviceId.setText(defaultGatewayDeviceId())
+            }
+
+            val cfg = saveGatewayConfig(
+                editServer = editServer,
+                editDeviceId = editDeviceId,
+                editApiKey = editApiKey,
+                editWebUiPort = editWebUiPort,
+                textSimInfo = textSimInfo,
+                textStatus = textStatus,
+                showSavedStatus = false
+            ) ?: return@registerForActivityResult
+
+            showProgress(indeterminate = true)
+            GatewayRuntime.registerGateway(this, cfg) { status ->
+                runOnUiThread {
+                    hideProgress()
+                    textStatus.text = if (status.startsWith("Register error:", ignoreCase = true)) {
+                        getString(R.string.status_onboarding_scan_error, status)
+                    } else {
+                        getString(R.string.status_onboarding_applied)
+                    }
+                }
+            }
+        }
+
         GatewaySyncWorker.schedule(this)
         startWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
         GatewayForegroundService.start(this)
 
         btnSave.setOnClickListener {
-            val serverText = editServer.text.toString().trim()
-            val deviceIdText = editDeviceId.text.toString().trim()
-            val passwordText = editApiKey.text.toString().trim()
-            val port = editWebUiPort.text.toString().trim().toIntOrNull()
-            if (serverText.isBlank()) {
-                textStatus.text = getString(R.string.status_invalid_server)
-                return@setOnClickListener
-            }
-            if (deviceIdText.isBlank()) {
-                textStatus.text = getString(R.string.status_invalid_device)
-                return@setOnClickListener
-            }
-            if (passwordText.isBlank()) {
-                textStatus.text = getString(R.string.status_invalid_password)
-                return@setOnClickListener
-            }
-            if (port == null || port !in 1024..65535) {
-                textStatus.text = getString(R.string.status_invalid_port)
-                return@setOnClickListener
-            }
-
-            pref.edit()
-                .putString("server_base", serverText)
-                .putString("device_id", deviceIdText)
-                .remove("sim_sub_id")
-                .putString("webui_port", port.toString())
-                .apply()
-            GatewaySecretStore.savePassword(this, passwordText)
-            RuntimeConfig.password = passwordText
-            val cfg = GatewayConfig(
-                serverBaseUrl = serverText,
-                deviceId = deviceIdText
+            saveGatewayConfig(
+                editServer = editServer,
+                editDeviceId = editDeviceId,
+                editApiKey = editApiKey,
+                editWebUiPort = editWebUiPort,
+                textSimInfo = textSimInfo,
+                textStatus = textStatus
             )
-            GatewaySyncWorker.schedule(this)
-            GatewayForegroundService.start(this)
-            restartWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
-            textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
-            textStatus.text = getString(R.string.status_saved_auto_sync)
-            GatewayRuntime.pushSimState(this, cfg) {
-                runOnUiThread {
-                    textStatus.text = getString(R.string.status_saved_auto_sync)
-                }
+        }
+
+        btnScanOnboarding.setOnClickListener {
+            val options = ScanOptions().apply {
+                setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                setPrompt("Scan onboarding QR")
+                setBeepEnabled(false)
+                setOrientationLocked(false)
             }
+            scanOnboardingLauncher.launch(options)
         }
 
         btnRegister.setOnClickListener {
@@ -278,6 +305,108 @@ class MainActivity : ComponentActivity() {
                 textStatus = textStatus
             )
         }
+    }
+
+    private fun saveGatewayConfig(
+        editServer: EditText,
+        editDeviceId: EditText,
+        editApiKey: EditText,
+        editWebUiPort: EditText,
+        textSimInfo: TextView,
+        textStatus: TextView,
+        showSavedStatus: Boolean = true
+    ): GatewayConfig? {
+        val serverText = editServer.text.toString().trim()
+        val deviceIdText = editDeviceId.text.toString().trim()
+        val passwordText = editApiKey.text.toString().trim()
+        val port = editWebUiPort.text.toString().trim().toIntOrNull()
+        if (serverText.isBlank()) {
+            textStatus.text = getString(R.string.status_invalid_server)
+            return null
+        }
+        if (deviceIdText.isBlank()) {
+            textStatus.text = getString(R.string.status_invalid_device)
+            return null
+        }
+        if (passwordText.isBlank()) {
+            textStatus.text = getString(R.string.status_invalid_password)
+            return null
+        }
+        if (port == null || port !in 1024..65535) {
+            textStatus.text = getString(R.string.status_invalid_port)
+            return null
+        }
+
+        pref.edit()
+            .putString("server_base", serverText)
+            .putString("device_id", deviceIdText)
+            .remove("sim_sub_id")
+            .putString("webui_port", port.toString())
+            .apply()
+        GatewaySecretStore.savePassword(this, passwordText)
+        RuntimeConfig.password = passwordText
+        val cfg = GatewayConfig(
+            serverBaseUrl = serverText,
+            deviceId = deviceIdText
+        )
+        GatewaySyncWorker.schedule(this)
+        GatewayForegroundService.start(this)
+        restartWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
+        textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
+        if (showSavedStatus) {
+            textStatus.text = getString(R.string.status_saved_auto_sync)
+        }
+        GatewayRuntime.pushSimState(this, cfg) {
+            runOnUiThread {
+                if (showSavedStatus) {
+                    textStatus.text = getString(R.string.status_saved_auto_sync)
+                }
+            }
+        }
+        return cfg
+    }
+
+    private fun defaultGatewayDeviceId(): String {
+        val model = Build.MODEL?.trim().orEmpty()
+        if (model.isNotBlank()) {
+            return model.replace(Regex("\\s+"), "-").take(96)
+        }
+        return "android-gateway"
+    }
+
+    private fun parseOnboardingPayload(raw: String): OnboardingQrPayload? {
+        val text = raw.trim()
+        if (text.isEmpty()) {
+            return null
+        }
+
+        return runCatching {
+            if (text.startsWith("{")) {
+                val json = org.json.JSONObject(text)
+                val server = json.optString("serverBaseUrl", "").trim()
+                val clientToken = json.optString("clientToken", "").trim()
+                val gatewayToken = json.optString("gatewayToken", "").trim()
+                if (server.isBlank() || clientToken.isBlank() || gatewayToken.isBlank()) {
+                    null
+                } else {
+                    OnboardingQrPayload(server, clientToken, gatewayToken)
+                }
+            } else {
+                val parts = text.split('|')
+                if (parts.size < 4 || parts[0].trim() != "RMS1") {
+                    null
+                } else {
+                    val server = parts[1].trim()
+                    val clientToken = parts[2].trim()
+                    val gatewayToken = parts[3].trim()
+                    if (server.isBlank() || clientToken.isBlank() || gatewayToken.isBlank()) {
+                        null
+                    } else {
+                        OnboardingQrPayload(server, clientToken, gatewayToken)
+                    }
+                }
+            }
+        }.getOrNull()
     }
 
     private fun showPermissionToolsDialog(textStatus: TextView) {

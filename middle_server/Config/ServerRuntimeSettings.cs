@@ -3,7 +3,6 @@ using System.Text;
 
 public sealed class ServerRuntimeSettings
 {
-    public string Password { get; }
     public string GatewayToken { get; }
     public string ClientToken { get; }
     public string AdminToken { get; }
@@ -15,7 +14,7 @@ public sealed class ServerRuntimeSettings
     public long DatabaseMaxBytes { get; }
     public int MaintenanceIntervalMinutes { get; }
     public string ServerConfigFilePath { get; }
-    public string LegacyPasswordFilePath { get; }
+    public bool IsFirstStart { get; }
 
     private const int DefaultHttpsPort = 5001;
     private const int DefaultLogRetentionDays = 14;
@@ -29,10 +28,9 @@ public sealed class ServerRuntimeSettings
     {
         var baseDir = RuntimeLayout.RuntimeDirectory;
         ServerConfigFilePath = Path.Combine(baseDir, "server.conf");
-        LegacyPasswordFilePath = Path.Combine(baseDir, "password.conf");
 
         var config = LoadOrCreateConfig();
-        Password = config.Password;
+        IsFirstStart = config.IsFirstStart;
         GatewayToken = config.GatewayToken;
         ClientToken = config.ClientToken;
         AdminToken = config.AdminToken;
@@ -46,7 +44,7 @@ public sealed class ServerRuntimeSettings
     }
 
     private (
-        string Password,
+        bool IsFirstStart,
         string GatewayToken,
         string ClientToken,
         string AdminToken,
@@ -61,16 +59,11 @@ public sealed class ServerRuntimeSettings
     {
         if (!File.Exists(ServerConfigFilePath))
         {
-            var legacyPassword = TryLoadLegacyPassword();
-            var generatedPassword = string.IsNullOrWhiteSpace(legacyPassword)
-                ? GenerateSecret()
-                : legacyPassword!;
             var generatedGatewayToken = GenerateSecret();
             var generatedClientToken = GenerateSecret();
             var generatedAdminToken = GenerateSecret();
             WriteServerConfig(
                 httpsPort: DefaultHttpsPort,
-                password: generatedPassword,
                 gatewayToken: generatedGatewayToken,
                 clientToken: generatedClientToken,
                 adminToken: generatedAdminToken,
@@ -82,7 +75,7 @@ public sealed class ServerRuntimeSettings
                 maintenanceIntervalMinutes: DefaultMaintenanceIntervalMinutes
             );
             return (
-                generatedPassword,
+                true,
                 generatedGatewayToken,
                 generatedClientToken,
                 generatedAdminToken,
@@ -98,14 +91,6 @@ public sealed class ServerRuntimeSettings
 
         var values = ParseKeyValueFile(ServerConfigFilePath);
         var changed = false;
-
-        var password = ReadOrGenerateSecret(values, "password", ref changed);
-        if (string.IsNullOrWhiteSpace(password))
-        {
-            var legacy = TryLoadLegacyPassword();
-            password = string.IsNullOrWhiteSpace(legacy) ? GenerateSecret() : legacy!;
-            changed = true;
-        }
 
         var gatewayToken = ReadOrGenerateSecret(values, "gateway_token", ref changed);
         var clientToken = ReadOrGenerateSecret(values, "client_token", ref changed);
@@ -123,7 +108,6 @@ public sealed class ServerRuntimeSettings
         {
             WriteServerConfig(
                 httpsPort: httpsPort,
-                password: password,
                 gatewayToken: gatewayToken,
                 clientToken: clientToken,
                 adminToken: adminToken,
@@ -137,7 +121,7 @@ public sealed class ServerRuntimeSettings
         }
 
         return (
-            password,
+            false,
             gatewayToken,
             clientToken,
             adminToken,
@@ -149,33 +133,6 @@ public sealed class ServerRuntimeSettings
             MbToBytes(dbMaxMb),
             maintenanceIntervalMinutes
         );
-    }
-
-    private string? TryLoadLegacyPassword()
-    {
-        if (!File.Exists(LegacyPasswordFilePath))
-        {
-            return null;
-        }
-
-        var values = ParseKeyValueFile(LegacyPasswordFilePath);
-        if (values.TryGetValue("password", out var password) && !string.IsNullOrWhiteSpace(password))
-        {
-            return password;
-        }
-
-        var raw = File.ReadAllLines(LegacyPasswordFilePath, Encoding.UTF8)
-            .Select(x => x.Trim())
-            .FirstOrDefault(x => !string.IsNullOrWhiteSpace(x) && !x.StartsWith("#", StringComparison.Ordinal));
-
-        if (string.IsNullOrWhiteSpace(raw))
-        {
-            return null;
-        }
-
-        return raw.Contains('=')
-            ? raw[(raw.IndexOf('=') + 1)..].Trim()
-            : raw;
     }
 
     private static Dictionary<string, string> ParseKeyValueFile(string path)
@@ -237,7 +194,6 @@ public sealed class ServerRuntimeSettings
 
     private void WriteServerConfig(
         int httpsPort,
-        string password,
         string gatewayToken,
         string clientToken,
         string adminToken,
@@ -254,10 +210,7 @@ public sealed class ServerRuntimeSettings
 # Generated on first start. Edit values and restart the service.
 https_port={httpsPort}
 
-# Legacy shared password fallback (kept for compatibility)
-password={password}
-
-# New segmented authentication tokens
+# Segmented authentication tokens
 gateway_token={gatewayToken}
 client_token={clientToken}
 admin_token={adminToken}

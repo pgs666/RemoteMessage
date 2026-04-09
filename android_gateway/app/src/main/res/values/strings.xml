@@ -16,6 +16,7 @@
     <string name="btn_test_local_sms">Test Local SMS Read</string>
     <string name="btn_flush_pending">Flush Pending Uploads</string>
     <string name="btn_import_cert">Import Server Certificate</string>
+    <string name="btn_scan_onboarding_qr">Scan Onboarding QR</string>
     <string name="btn_request_sms_role">Request Default SMS Role</string>
     <string name="btn_permission_tools">Permission Tools</string>
     <string name="btn_open_log_page">Open Log Page</string>
@@ -72,6 +73,9 @@
     <string name="status_database_clear_failed">Failed to clear database: %1$s</string>
     <string name="status_server_database_cleared">Server data cleared: %1$s</string>
     <string name="status_server_database_clear_failed">Failed to clear server data: %1$s</string>
+    <string name="status_onboarding_applied">Onboarding QR applied. Configuration saved and gateway registered.</string>
+    <string name="status_onboarding_invalid">Onboarding QR format is invalid</string>
+    <string name="status_onboarding_scan_error">Onboarding QR scan failed: %1$s</string>
 
     <string name="title_confirm_clear_database">Clear gateway database?</string>
     <string name="message_confirm_clear_database">This will delete all pending local uploads. Continue?</string>

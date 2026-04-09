@@ -2,8 +2,15 @@
 import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'app_data.dart';
+import 'onboarding_qr.dart';
+
+enum _OnboardingScanSource {
+  camera,
+  image,
+}
 
 class SettingsResult {
   final String serverBaseUrl;
@@ -87,6 +94,7 @@ class _SettingsPageState extends State<SettingsPage> {
   bool _gatewayStatusBusy = false;
   GatewayOnlineStatus? _gatewayOnlineStatus;
   String? _gatewayOnlineStatusError;
+  final ImagePicker _imagePicker = ImagePicker();
 
   bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
@@ -97,6 +105,130 @@ class _SettingsPageState extends State<SettingsPage> {
       return base;
     }
     return '$base\n${AppSettingsStore.iosSystemCertificateHint(isZh: _isZh)}';
+  }
+
+  Future<void> _scanOnboardingIntoMainForm() async {
+    final payload = await _pickOnboardingPayload();
+    if (payload == null || !mounted) {
+      return;
+    }
+    setState(() {
+      _serverCtrl.text = payload.serverBaseUrl;
+      _passwordCtrl.text = payload.clientToken;
+      _applyFormToActiveProfile();
+    });
+    await _refreshGatewayOnlineStatus(interactive: false);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(tr('扫码成功，已填充服务器和密码。', 'QR imported. Server and password filled.')),
+      ),
+    );
+  }
+
+  Future<void> _scanOnboardingIntoControllers({
+    required TextEditingController serverController,
+    required TextEditingController passwordController,
+  }) async {
+    final payload = await _pickOnboardingPayload();
+    if (payload == null || !mounted) {
+      return;
+    }
+    serverController.text = payload.serverBaseUrl;
+    passwordController.text = payload.clientToken;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        behavior: SnackBarBehavior.floating,
+        content: Text(tr('扫码成功，已填充服务器和密码。', 'QR imported. Server and password filled.')),
+      ),
+    );
+  }
+
+  Future<OnboardingQrPayload?> _pickOnboardingPayload() async {
+    final hasCamera = Platform.isAndroid || Platform.isIOS;
+    _OnboardingScanSource? source;
+    if (hasCamera) {
+      source = await showModalBottomSheet<_OnboardingScanSource>(
+        context: context,
+        builder: (sheetContext) => SafeArea(
+          child: Wrap(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.qr_code_scanner),
+                title: Text(tr('相机扫码', 'Scan with camera')),
+                onTap: () => Navigator.pop(sheetContext, _OnboardingScanSource.camera),
+              ),
+              ListTile(
+                leading: const Icon(Icons.image_search),
+                title: Text(tr('导入二维码截图', 'Import QR image')),
+                onTap: () => Navigator.pop(sheetContext, _OnboardingScanSource.image),
+              ),
+              ListTile(
+                leading: const Icon(Icons.close),
+                title: Text(tr('取消', 'Cancel')),
+                onTap: () => Navigator.pop(sheetContext),
+              ),
+            ],
+          ),
+        ),
+      );
+    } else {
+      source = _OnboardingScanSource.image;
+    }
+
+    if (source == null) {
+      return null;
+    }
+
+    try {
+      switch (source) {
+        case _OnboardingScanSource.camera:
+          return await _scanOnboardingFromCamera();
+        case _OnboardingScanSource.image:
+          return await _scanOnboardingFromImage();
+      }
+    } catch (e) {
+      if (!mounted) return null;
+      final detail = _appendIosCertificateHint(e);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('${tr('二维码识别失败', 'QR decode failed')}: $detail'),
+        ),
+      );
+      return null;
+    }
+  }
+
+  Future<OnboardingQrPayload?> _scanOnboardingFromCamera() async {
+    final photo = await _imagePicker.pickImage(source: ImageSource.camera);
+    if (photo == null) {
+      return null;
+    }
+    final bytes = await photo.readAsBytes();
+    final raw = decodeQrTextFromImageBytes(bytes);
+    return OnboardingQrPayload.parse(raw);
+  }
+
+  Future<OnboardingQrPayload?> _scanOnboardingFromImage() async {
+    final file = await openFile(
+      acceptedTypeGroups: [
+        XTypeGroup(
+          label: 'image',
+          extensions: ['png', 'jpg', 'jpeg', 'bmp', 'webp', 'gif'],
+          mimeTypes: ['image/png', 'image/jpeg', 'image/bmp', 'image/webp', 'image/gif'],
+          uniformTypeIdentifiers: ['public.image'],
+        ),
+      ],
+      confirmButtonText: tr('导入', 'Import'),
+    );
+    if (file == null) {
+      return null;
+    }
+    final bytes = await file.readAsBytes();
+    final raw = decodeQrTextFromImageBytes(bytes);
+    return OnboardingQrPayload.parse(raw);
   }
 
   @override
@@ -214,6 +346,26 @@ class _SettingsPageState extends State<SettingsPage> {
                 obscureText: true,
                 decoration: InputDecoration(labelText: tr('密码', 'Password')),
               ),
+              const SizedBox(height: 10),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: OutlinedButton.icon(
+                  onPressed: () => _scanOnboardingIntoControllers(
+                    serverController: serverCtrl,
+                    passwordController: passwordCtrl,
+                  ),
+                  icon: const Icon(Icons.qr_code_scanner),
+                  label: Text(tr('扫码填充服务器与密码', 'Scan QR to fill server/password')),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  tr('客户端设备 ID 需手动填写。', 'Client device ID must be entered manually.'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
             ],
           ),
         ),
@@ -301,7 +453,6 @@ class _SettingsPageState extends State<SettingsPage> {
       final secret = (password ?? '').trim();
       if (secret.isNotEmpty) {
         req.headers.set('X-Client-Token', secret);
-        req.headers.set('X-Password', secret);
       }
       final resp = await req.close();
       final body = await utf8.decodeStream(resp);
@@ -641,6 +792,17 @@ class _SettingsPageState extends State<SettingsPage> {
               controller: _passwordCtrl,
               obscureText: true,
               decoration: InputDecoration(labelText: tr('密码', 'Password'), border: const OutlineInputBorder()),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: _scanOnboardingIntoMainForm,
+              icon: const Icon(Icons.qr_code_scanner),
+              label: Text(tr('扫码填充服务器与密码', 'Scan QR to fill server/password')),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              tr('客户端设备 ID 需手动填写。', 'Client device ID must be entered manually.'),
+              style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
             _buildSimInfoCard(),

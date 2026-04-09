@@ -1,4 +1,4 @@
-package com.remotemessage.gateway
+package cn.ac.studio.rmg
 
 import android.app.Activity
 import android.app.PendingIntent
@@ -1166,7 +1166,6 @@ object GatewayRuntime {
                     val password = RuntimeConfig.password?.trim()
                     if (!password.isNullOrEmpty()) {
                         req.header("X-Gateway-Token", password)
-                        req.header("X-Password", password)
                     }
                     chain.proceed(req.build())
                 })

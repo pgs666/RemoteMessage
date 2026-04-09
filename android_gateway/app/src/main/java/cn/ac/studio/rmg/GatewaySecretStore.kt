@@ -1,4 +1,4 @@
-package com.remotemessage.gateway
+package cn.ac.studio.rmg
 
 import android.content.Context
 import android.security.keystore.KeyGenParameterSpec
@@ -13,8 +13,6 @@ import javax.crypto.spec.GCMParameterSpec
 
 object GatewaySecretStore {
     private const val PREF_NAME = "gateway_config"
-    private const val LEGACY_PASSWORD_KEY = "password"
-    private const val LEGACY_API_KEY_KEY = "api_key"
     private const val ENCRYPTED_PASSWORD_KEY = "password_encrypted_v1"
     private const val KEY_ALIAS = "remotemessage_gateway_secret_v1"
 
@@ -25,23 +23,16 @@ object GatewaySecretStore {
     fun loadPassword(context: Context): String? {
         val appContext = context.applicationContext
         val prefs = appContext.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
-        migrateLegacyPassword(appContext, prefs)
-
         val encrypted = prefs.getString(ENCRYPTED_PASSWORD_KEY, null)?.trim()
-        if (!encrypted.isNullOrEmpty()) {
-            runCatching { decrypt(encrypted) }
-                .onSuccess { plain ->
-                    val normalized = plain.trim()
-                    if (normalized.isNotEmpty()) {
-                        return normalized
-                    }
-                }
-                .onFailure {
-                    GatewayDebugLog.add(appContext, "Secure password decrypt failed: ${it.message}")
-                }
+        if (encrypted.isNullOrEmpty()) {
+            return null
         }
 
-        return prefs.getString(LEGACY_PASSWORD_KEY, prefs.getString(LEGACY_API_KEY_KEY, ""))
+        return runCatching { decrypt(encrypted) }
+            .onFailure {
+                GatewayDebugLog.add(appContext, "Secure password decrypt failed: ${it.message}")
+            }
+            .getOrNull()
             ?.trim()
             ?.ifEmpty { null }
     }
@@ -52,11 +43,7 @@ object GatewaySecretStore {
         val normalized = password?.trim().orEmpty()
 
         if (normalized.isEmpty()) {
-            prefs.edit()
-                .remove(ENCRYPTED_PASSWORD_KEY)
-                .remove(LEGACY_PASSWORD_KEY)
-                .remove(LEGACY_API_KEY_KEY)
-                .apply()
+            prefs.edit().remove(ENCRYPTED_PASSWORD_KEY).apply()
             return
         }
 
@@ -64,36 +51,10 @@ object GatewaySecretStore {
             val encrypted = encrypt(normalized)
             prefs.edit()
                 .putString(ENCRYPTED_PASSWORD_KEY, encrypted)
-                .remove(LEGACY_PASSWORD_KEY)
-                .remove(LEGACY_API_KEY_KEY)
                 .apply()
         }.onFailure {
-            // Last-resort fallback keeps old behavior if keystore fails unexpectedly.
-            GatewayDebugLog.add(appContext, "Secure password save fallback to legacy storage: ${it.message}")
-            prefs.edit()
-                .putString(LEGACY_PASSWORD_KEY, normalized)
-                .remove(LEGACY_API_KEY_KEY)
-                .apply()
+            GatewayDebugLog.add(appContext, "Secure password save failed: ${it.message}")
         }
-    }
-
-    private fun migrateLegacyPassword(context: Context, prefs: android.content.SharedPreferences) {
-        val encrypted = prefs.getString(ENCRYPTED_PASSWORD_KEY, null)?.trim()
-        if (!encrypted.isNullOrEmpty()) {
-            if (prefs.contains(LEGACY_API_KEY_KEY)) {
-                prefs.edit().remove(LEGACY_API_KEY_KEY).apply()
-            }
-            return
-        }
-
-        val legacy = prefs.getString(LEGACY_PASSWORD_KEY, prefs.getString(LEGACY_API_KEY_KEY, ""))
-            ?.trim()
-            .orEmpty()
-        if (legacy.isEmpty()) {
-            return
-        }
-
-        savePassword(context, legacy)
     }
 
     private fun getOrCreateSecretKey(): SecretKey {

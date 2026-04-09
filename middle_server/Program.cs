@@ -47,9 +47,7 @@ app.Logger.LogInformation("Runtime files are created beside the executable: serv
 app.Logger.LogInformation("SQLite database path: {DatabaseFilePath}", startupRepo.DatabaseFilePath);
 app.Logger.LogInformation("Server log path: {ServerLogPath}", serverLogPath);
 app.Logger.LogInformation("Server crypto private key path: {ServerCryptoKeyPath}", startupCrypto.PrivateKeyFilePath);
-app.Logger.LogInformation(
-    "Auth enabled: gateway/client/admin segmented tokens with legacy X-Password fallback for compatibility."
-);
+app.Logger.LogInformation("Auth enabled: token-only segmented headers (X-Gateway-Token / X-Client-Token / X-Admin-Token).");
 app.Logger.LogInformation(
     "Maintenance policy: every {IntervalMinutes} min; log retention {LogDays} days / {LogMaxMb} MB; api_logs {ApiLogDays} days; messages {MessageDays} days (0=keep); db max {DbMaxMb} MB.",
     serverSettings.MaintenanceIntervalMinutes,
@@ -59,9 +57,9 @@ app.Logger.LogInformation(
     serverSettings.MessageRetentionDays,
     serverSettings.DatabaseMaxBytes / (1024 * 1024)
 );
-if (serverSettings.Password.Length < 16)
+if (serverSettings.IsFirstStart)
 {
-    app.Logger.LogWarning("Configured password is shorter than 16 characters. Use a long random password before any internet exposure.");
+    OnboardingQrBootstrap.WriteFirstStartArtifacts(serverSettings, app.Logger);
 }
 app.Logger.LogWarning("Security review result: this service is suitable for LAN/VPN or reverse-proxied deployment, but it is not sufficient for direct public internet exposure without stronger auth, rate limiting, replay protection, and monitoring.");
 
@@ -383,38 +381,32 @@ static bool IsRequestAuthorized(HttpRequest request, ServerRuntimeSettings setti
         return ApiSupport.PasswordMatches(provided, expected);
     }
 
-    static bool LegacyPasswordMatches(Microsoft.AspNetCore.Http.IHeaderDictionary headers, ServerRuntimeSettings settings)
-    {
-        return HeaderMatches(headers, "X-Password", settings.Password);
-    }
-
     var path = request.Path.Value ?? string.Empty;
     var headers = request.Headers;
 
     if (path.StartsWith("/api/gateway/", StringComparison.OrdinalIgnoreCase))
     {
-        return HeaderMatches(headers, "X-Gateway-Token", settings.GatewayToken) || LegacyPasswordMatches(headers, settings);
+        return HeaderMatches(headers, "X-Gateway-Token", settings.GatewayToken);
     }
 
     if (path.StartsWith("/api/client/", StringComparison.OrdinalIgnoreCase))
     {
-        return HeaderMatches(headers, "X-Client-Token", settings.ClientToken) || LegacyPasswordMatches(headers, settings);
+        return HeaderMatches(headers, "X-Client-Token", settings.ClientToken);
     }
 
     if (path.StartsWith("/api/admin/", StringComparison.OrdinalIgnoreCase))
     {
-        return HeaderMatches(headers, "X-Admin-Token", settings.AdminToken) || LegacyPasswordMatches(headers, settings);
+        return HeaderMatches(headers, "X-Admin-Token", settings.AdminToken);
     }
 
     if (path.StartsWith("/api/crypto/", StringComparison.OrdinalIgnoreCase))
     {
         return HeaderMatches(headers, "X-Gateway-Token", settings.GatewayToken)
             || HeaderMatches(headers, "X-Client-Token", settings.ClientToken)
-            || HeaderMatches(headers, "X-Admin-Token", settings.AdminToken)
-            || LegacyPasswordMatches(headers, settings);
+            || HeaderMatches(headers, "X-Admin-Token", settings.AdminToken);
     }
 
-    return LegacyPasswordMatches(headers, settings);
+    return false;
 }
 
 static async Task RunMaintenanceLoopAsync(WebApplication app, ServerRuntimeSettings settings, CancellationToken cancellationToken)

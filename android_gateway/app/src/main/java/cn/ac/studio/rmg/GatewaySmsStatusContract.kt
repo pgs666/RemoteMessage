@@ -1,7 +1,7 @@
-package com.remotemessage.gateway
+package cn.ac.studio.rmg
 
 object GatewaySmsStatusContract {
-    const val ACTION_SMS_SENT_STATUS = "com.remotemessage.gateway.ACTION_SMS_SENT_STATUS"
+    const val ACTION_SMS_SENT_STATUS = "cn.ac.studio.rmg.ACTION_SMS_SENT_STATUS"
 
     const val EXTRA_SERVER_BASE_URL = "serverBaseUrl"
     const val EXTRA_DEVICE_ID = "deviceId"
