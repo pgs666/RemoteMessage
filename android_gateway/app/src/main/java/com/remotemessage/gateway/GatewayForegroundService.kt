@@ -124,7 +124,7 @@ class GatewayForegroundService : Service() {
     }
 
     private fun updateNotification(content: String) {
-        val manager = getSystemService(NotificationManager::class.java) ?: return
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         manager.notify(NOTIFICATION_ID, buildNotification(content))
     }
 
@@ -150,7 +150,7 @@ class GatewayForegroundService : Service() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) {
             return
         }
-        val manager = getSystemService(NotificationManager::class.java) ?: return
+        val manager = getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         val channel = NotificationChannel(
             CHANNEL_ID,
             getString(R.string.fg_sync_channel_name),

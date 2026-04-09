@@ -5,12 +5,9 @@ import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import java.io.ByteArrayOutputStream
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import android.net.Uri
 import android.os.Build
 import android.provider.Telephony
-import android.telephony.SubscriptionManager
 import android.telephony.SmsManager
 import okhttp3.Interceptor
 import okhttp3.MediaType.Companion.toMediaType
@@ -74,6 +71,7 @@ object GatewayRuntime {
     private const val HISTORY_FORCE_FULL_SYNC_ONCE_KEY = "history_force_full_sync_once"
     private const val SERVER_PUBLIC_KEY_CACHE_MS = 60 * 1000L
     private const val SEND_TRACKER_PREF = "gateway_send_tracker"
+    private const val INVALID_SUBSCRIPTION_ID = -1
 
     @Volatile
     private var cachedServerPublicPem: String? = null
@@ -809,11 +807,19 @@ object GatewayRuntime {
     }
 
     private fun smsManagerForSubscriptionId(subscriptionId: Int?): SmsManager {
-        return when (subscriptionId) {
-            null -> SmsManager.getDefault()
-            SubscriptionManager.INVALID_SUBSCRIPTION_ID -> SmsManager.getDefault()
-            else -> SmsManager.getSmsManagerForSubscriptionId(subscriptionId)
+        if (subscriptionId == null || subscriptionId == INVALID_SUBSCRIPTION_ID) {
+            return SmsManager.getDefault()
         }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP_MR1) {
+            val specificManager = runCatching {
+                val method = SmsManager::class.java.getMethod("getSmsManagerForSubscriptionId", Int::class.javaPrimitiveType!!)
+                method.invoke(null, subscriptionId) as? SmsManager
+            }.getOrNull()
+            if (specificManager != null) {
+                return specificManager
+            }
+        }
+        return SmsManager.getDefault()
     }
 
     private fun sendTextMessageCompat(
@@ -1225,24 +1231,22 @@ object GatewayRuntime {
             }
         }
 
-        val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-        if (!keyStore.containsAlias(KEYSTORE_ALIAS)) {
-            val kpg = KeyPairGenerator.getInstance(KeyProperties.KEY_ALGORITHM_RSA, "AndroidKeyStore")
-            val spec = KeyGenParameterSpec.Builder(
-                KEYSTORE_ALIAS,
-                KeyProperties.PURPOSE_DECRYPT or KeyProperties.PURPOSE_ENCRYPT
-            )
-                .setKeySize(2048)
-                .setDigests(KeyProperties.DIGEST_SHA256, KeyProperties.DIGEST_SHA512)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_RSA_OAEP)
-                .build()
-            kpg.initialize(spec)
-            kpg.generateKeyPair()
+        val pubPem: String
+        val priPem: String
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val generatedPub = AndroidKeystoreRsa.getOrCreatePublicKeyPem(KEYSTORE_ALIAS) { title, raw ->
+                toPem(title, raw)
+            }
+            pubPem = generatedPub
+            priPem = "android-keystore:$KEYSTORE_ALIAS"
+        } else {
+            val pair = KeyPairGenerator.getInstance("RSA").apply {
+                initialize(2048)
+            }.generateKeyPair()
+            pubPem = toPem("PUBLIC KEY", pair.public.encoded)
+            priPem = toPem("PRIVATE KEY", pair.private.encoded)
         }
 
-        val cert = keyStore.getCertificate(KEYSTORE_ALIAS) ?: error("android keystore certificate missing")
-        val pubPem = toPem("PUBLIC KEY", cert.publicKey.encoded)
-        val priPem = "android-keystore:$KEYSTORE_ALIAS"
         pref.edit().putString(KEY_PUBLIC, pubPem).putString(KEY_PRIVATE, priPem).apply()
         return pubPem to priPem
     }
