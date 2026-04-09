@@ -163,6 +163,15 @@ object GatewayRuntime {
                     }.onFailure {
                         GatewayDebugLog.add(context, "Gateway key re-register failed: ${it.debugSummary()}")
                     }
+                    if (privatePem.startsWith("android-keystore:")) {
+                        runCatching {
+                            rotateToSoftwareKeyPair(context)
+                            registerGatewayKeySync(context, cfg)
+                            GatewayDebugLog.add(context, "Gateway key switched to software RSA and re-registered")
+                        }.onFailure {
+                            GatewayDebugLog.add(context, "Gateway software key fallback failed: ${it.debugSummary()}")
+                        }
+                    }
                     throw decryptError
                 }
                 val payload = JSONObject(plain)
@@ -673,6 +682,20 @@ object GatewayRuntime {
                 error("register failed: ${it.code} $body")
             }
         }
+    }
+
+    private fun rotateToSoftwareKeyPair(context: Context): Pair<String, String> {
+        val keyPairGenerator = KeyPairGenerator.getInstance("RSA")
+        keyPairGenerator.initialize(2048)
+        val pair = keyPairGenerator.generateKeyPair()
+        val pubPem = toPem("PUBLIC KEY", pair.public.encoded)
+        val priPem = toPem("PRIVATE KEY", pair.private.encoded)
+        context.getSharedPreferences(PREF, Context.MODE_PRIVATE)
+            .edit()
+            .putString(KEY_PUBLIC, pubPem)
+            .putString(KEY_PRIVATE, priPem)
+            .apply()
+        return pubPem to priPem
     }
 
     private fun httpClient(context: Context, cfg: GatewayConfig): OkHttpClient {
