@@ -36,7 +36,11 @@ jobs:
         run: python -m pip install --upgrade pillow
 
       - name: Inject client source
-        run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
+        shell: bash
+        run: |
+          rm -rf client/flutter_client_build/lib
+          mkdir -p client/flutter_client_build/lib
+          cp -R client/flutter_client_source/lib/. client/flutter_client_build/lib/
 
       - name: Apply client app icons
         run: python client/apply_client_icons.py client/flutter_client_build client/icons
@@ -75,7 +79,11 @@ jobs:
         run: python -m pip install --upgrade pillow
 
       - name: Inject client source
-        run: copy client\flutter_client_source\lib\main.dart client\flutter_client_build\lib\main.dart
+        shell: pwsh
+        run: |
+          Remove-Item -LiteralPath client/flutter_client_build/lib -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path client/flutter_client_build/lib -Force | Out-Null
+          Copy-Item -Path client/flutter_client_source/lib/* -Destination client/flutter_client_build/lib -Recurse -Force
 
       - name: Apply client app icons
         run: python client/apply_client_icons.py client/flutter_client_build client/icons
@@ -119,7 +127,11 @@ jobs:
         run: python -m pip install --upgrade pillow
 
       - name: Inject client source
-        run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
+        shell: bash
+        run: |
+          rm -rf client/flutter_client_build/lib
+          mkdir -p client/flutter_client_build/lib
+          cp -R client/flutter_client_source/lib/. client/flutter_client_build/lib/
 
       - name: Apply client app icons
         run: python client/apply_client_icons.py client/flutter_client_build client/icons
@@ -254,7 +266,11 @@ jobs:
         run: python -m pip install --upgrade pillow
 
       - name: Inject client source
-        run: cp client/flutter_client_source/lib/main.dart client/flutter_client_build/lib/main.dart
+        shell: bash
+        run: |
+          rm -rf client/flutter_client_build/lib
+          mkdir -p client/flutter_client_build/lib
+          cp -R client/flutter_client_source/lib/. client/flutter_client_build/lib/
 
       - name: Apply client app icons
         run: python client/apply_client_icons.py client/flutter_client_build client/icons
