@@ -11,6 +11,8 @@ import 'app_data.dart';
 import 'compose_message_page.dart';
 import 'settings_page.dart';
 
+enum _ChatMessageAction { delete }
+
 class MessageHomePage extends StatefulWidget {
   final AppSettingsStore settings;
   final ValueChanged<ThemeMode> onThemeChanged;
@@ -466,6 +468,74 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     await _setPin(conversation.phone, nextPinned);
   }
 
+  Future<void> _showMessageActions(SmsItem item) async {
+    final action = await showModalBottomSheet<_ChatMessageAction>(
+      context: context,
+      builder: (sheetContext) {
+        return SafeArea(
+          child: Wrap(
+            children: [
+              ListTile(
+                leading: const Icon(Icons.delete_outline),
+                title: Text(tr('删除短信', 'Delete message')),
+                onTap: () => Navigator.pop(sheetContext, _ChatMessageAction.delete),
+              ),
+              ListTile(
+                leading: const Icon(Icons.close),
+                title: Text(tr('取消', 'Cancel')),
+                onTap: () => Navigator.pop(sheetContext, null),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+    if (action != _ChatMessageAction.delete) return;
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: Text(tr('删除短信', 'Delete message')),
+          content: Text(
+            tr('确定删除这条短信吗？删除后将不会在本客户端再次显示。', 'Delete this message? It will no longer appear on this client.'),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext, false),
+              child: Text(tr('取消', 'Cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext, true),
+              child: Text(tr('删除', 'Delete')),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) return;
+    await _deleteMessage(item);
+  }
+
+  Future<void> _deleteMessage(SmsItem item) async {
+    if (_db == null) return;
+    try {
+      final deleted = await _localDb.deleteMessageById(item.id);
+      if (!deleted) {
+        if (!mounted) return;
+        await _showToastStatus(tr('短信不存在或已删除', 'Message already removed'));
+        return;
+      }
+      await _refreshLocalCaches();
+      if (!mounted) return;
+      await _showToastStatus(tr('短信已删除', 'Message deleted'));
+    } catch (e) {
+      if (!mounted) return;
+      await _showToastStatus('${tr('删除失败', 'Delete failed')}: $e', error: true);
+    }
+  }
+
   Future<void> _sendSmsToActive() async {
     final server = _serverCtrl.text.trim();
     final device = _deviceCtrl.text.trim();
@@ -808,39 +878,42 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                   final statusLine = _messageStatusLine(m);
                   return Align(
                     alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
-                    child: Container(
-                      margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
-                      padding: const EdgeInsets.all(10),
-                      constraints: const BoxConstraints(maxWidth: 460),
-                      decoration: BoxDecoration(
-                        color: mine ? Theme.of(context).colorScheme.primaryContainer : Theme.of(context).colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(16),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-                        children: [
-                          if (simLabel != null) ...[
-                            Text(simLabel, style: Theme.of(context).textTheme.labelSmall),
-                            const SizedBox(height: 4),
-                          ],
-                          Text(m.content),
-                          if (statusLine != null) ...[
+                    child: GestureDetector(
+                      onLongPress: () => _showMessageActions(m),
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        padding: const EdgeInsets.all(10),
+                        constraints: const BoxConstraints(maxWidth: 460),
+                        decoration: BoxDecoration(
+                          color: mine ? Theme.of(context).colorScheme.primaryContainer : Theme.of(context).colorScheme.surfaceContainerHighest,
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                          children: [
+                            if (simLabel != null) ...[
+                              Text(simLabel, style: Theme.of(context).textTheme.labelSmall),
+                              const SizedBox(height: 4),
+                            ],
+                            Text(m.content),
+                            if (statusLine != null) ...[
+                              const SizedBox(height: 4),
+                              Text(
+                                statusLine,
+                                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                      color: m.sendStatus == 'failed'
+                                          ? Theme.of(context).colorScheme.error
+                                          : Theme.of(context).textTheme.labelSmall?.color,
+                                    ),
+                              ),
+                            ],
                             const SizedBox(height: 4),
                             Text(
-                              statusLine,
-                              style: Theme.of(context).textTheme.labelSmall?.copyWith(
-                                    color: m.sendStatus == 'failed'
-                                        ? Theme.of(context).colorScheme.error
-                                        : Theme.of(context).textTheme.labelSmall?.color,
-                                  ),
+                              _formatMessageTimestamp(m.timestamp),
+                              style: Theme.of(context).textTheme.bodySmall,
                             ),
                           ],
-                          const SizedBox(height: 4),
-                          Text(
-                            _formatMessageTimestamp(m.timestamp),
-                            style: Theme.of(context).textTheme.bodySmall,
-                          ),
-                        ],
+                        ),
                       ),
                     ),
                   );

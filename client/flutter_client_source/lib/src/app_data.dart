@@ -537,6 +537,9 @@ class LocalDatabase {
   Future<bool> upsertMessage(SmsItem item) async {
     await init();
     final db = _db!;
+    if (_isMessageMarkedDeleted(db, item.id)) {
+      return false;
+    }
     _insertMessageIgnore(db, item);
     final inserted = (db.select('SELECT changes() AS c;').first['c'] as int) > 0;
     if (!inserted) {
@@ -553,11 +556,21 @@ class LocalDatabase {
     }
 
     final db = _db!;
+    final deletedIds = _loadDeletedMessageIdSet(
+      db,
+      items.map((e) => e.id).where((id) => id.isNotEmpty).toSet(),
+    );
     var added = 0;
     db.execute('BEGIN IMMEDIATE;');
     try {
       for (var i = 0; i < items.length; i++) {
         final item = items[i];
+        if (deletedIds.contains(item.id)) {
+          if ((i + 1) % 200 == 0 || i + 1 == items.length) {
+            onProgress?.call(i + 1, items.length);
+          }
+          continue;
+        }
         _insertMessageIgnore(db, item);
         final inserted = (db.select('SELECT changes() AS c;').first['c'] as int) > 0;
         if (inserted) {
@@ -575,6 +588,28 @@ class LocalDatabase {
       rethrow;
     }
     return added;
+  }
+
+  Future<bool> deleteMessageById(String messageId) async {
+    await init();
+    final id = messageId.trim();
+    if (id.isEmpty) return false;
+    final db = _db!;
+    db.execute('BEGIN IMMEDIATE;');
+    try {
+      db.execute(
+        'INSERT OR REPLACE INTO deleted_messages(id, deleted_at) VALUES(?, ?);',
+        [id, DateTime.now().millisecondsSinceEpoch],
+      );
+      db.execute('DELETE FROM messages WHERE id = ?;', [id]);
+      final deleted = (db.select('SELECT changes() AS c;').first['c'] as int) > 0;
+      db.execute('DELETE FROM pins WHERE phone NOT IN (SELECT DISTINCT phone FROM messages);');
+      db.execute('COMMIT;');
+      return deleted;
+    } catch (_) {
+      db.execute('ROLLBACK;');
+      rethrow;
+    }
   }
 
   void _insertMessageIgnore(sqlite.Database db, SmsItem item) {
@@ -795,6 +830,7 @@ class LocalDatabase {
     db.execute('BEGIN IMMEDIATE;');
     try {
       db.execute('DELETE FROM messages;');
+      db.execute('DELETE FROM deleted_messages;');
       db.execute('DELETE FROM pins;');
       db.execute('DELETE FROM meta;');
       db.execute('COMMIT;');
@@ -843,6 +879,13 @@ class LocalDatabase {
     ''');
 
     db.execute('''
+      CREATE TABLE IF NOT EXISTS deleted_messages(
+        id TEXT PRIMARY KEY,
+        deleted_at INTEGER NOT NULL
+      );
+    ''');
+
+    db.execute('''
       CREATE TABLE IF NOT EXISTS meta(
         key TEXT PRIMARY KEY,
         value TEXT NOT NULL
@@ -856,6 +899,35 @@ class LocalDatabase {
     } catch (_) {
       // ignore existing column errors
     }
+  }
+
+  bool _isMessageMarkedDeleted(sqlite.Database db, String messageId) {
+    if (messageId.trim().isEmpty) return false;
+    final rows = db.select('SELECT 1 AS hit FROM deleted_messages WHERE id = ? LIMIT 1;', [messageId]);
+    return rows.isNotEmpty;
+  }
+
+  Set<String> _loadDeletedMessageIdSet(sqlite.Database db, Set<String> ids) {
+    if (ids.isEmpty) return const {};
+    final all = ids.toList(growable: false);
+    final result = <String>{};
+    const chunkSize = 400;
+    for (var i = 0; i < all.length; i += chunkSize) {
+      final end = (i + chunkSize < all.length) ? i + chunkSize : all.length;
+      final chunk = all.sublist(i, end);
+      final placeholders = List.filled(chunk.length, '?').join(',');
+      final rows = db.select(
+        'SELECT id FROM deleted_messages WHERE id IN ($placeholders);',
+        chunk,
+      );
+      for (final row in rows) {
+        final id = row['id']?.toString();
+        if (id != null && id.isNotEmpty) {
+          result.add(id);
+        }
+      }
+    }
+    return result;
   }
 }
 
