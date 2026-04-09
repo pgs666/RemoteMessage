@@ -1,5 +1,6 @@
 package com.remotemessage.gateway
 
+import android.Manifest
 import android.app.Activity
 import android.app.AppOpsManager
 import android.content.Context
@@ -10,6 +11,7 @@ import android.os.PowerManager
 import android.os.Process
 import android.provider.Telephony
 import android.provider.Settings
+import androidx.core.content.ContextCompat
 
 object PermissionAndRoleHelper {
     fun isDefaultSmsApp(context: Context): Boolean {
@@ -62,5 +64,37 @@ object PermissionAndRoleHelper {
         if (hasUsageAccess(activity)) return
         val intent = Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)
         activity.startActivity(intent)
+    }
+
+    fun openAppDetailsSettings(activity: Activity) {
+        val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+            data = Uri.parse("package:${activity.packageName}")
+        }
+        activity.startActivity(intent)
+    }
+
+    fun runtimePermissionsForGateway(): List<String> {
+        return GatewayPermissionCenter.requiredRuntimePermissions()
+    }
+
+    fun missingRuntimePermissions(context: Context): List<String> {
+        return GatewayPermissionCenter.missingRuntimePermissions(context, runtimePermissionsForGateway())
+    }
+
+    fun hasCoreSmsRuntimePermissions(context: Context): Boolean {
+        val required = listOf(
+            Manifest.permission.READ_SMS,
+            Manifest.permission.SEND_SMS,
+            Manifest.permission.RECEIVE_SMS
+        )
+        return required.all { permission ->
+            ContextCompat.checkSelfPermission(context, permission) == android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+    }
+
+    fun hasPhoneIdentityPermission(context: Context): Boolean {
+        return ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_STATE) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                ContextCompat.checkSelfPermission(context, Manifest.permission.READ_PHONE_NUMBERS) == android.content.pm.PackageManager.PERMISSION_GRANTED)
     }
 }

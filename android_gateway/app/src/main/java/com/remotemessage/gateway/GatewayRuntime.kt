@@ -94,10 +94,8 @@ object GatewayRuntime {
 
     @Volatile
     private var cachedHttpClient: OkHttpClient? = null
-
     @Volatile
     private var cachedHttpClientBaseUrl: String? = null
-
     @Volatile
     private var cachedHttpClientCertStamp: Long = -1L
 
@@ -392,6 +390,7 @@ object GatewayRuntime {
 
         thread {
             runCatching {
+                requireReadSmsPermission(context)
                 val uri = Telephony.Sms.CONTENT_URI
                 val baseProjection = arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE)
                 val extendedProjection = arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE, "sub_id", "subscription_id")
@@ -646,6 +645,7 @@ object GatewayRuntime {
     }
 
     private fun readLocalSmsStats(context: Context): LocalSmsStats {
+        requireReadSmsPermission(context)
         val uri = Telephony.Sms.CONTENT_URI
         val projection = arrayOf(Telephony.Sms.DATE, Telephony.Sms.TYPE)
         val cursor = context.contentResolver.query(uri, projection, null, null, null)
@@ -681,6 +681,18 @@ object GatewayRuntime {
             oldestTimestamp = oldest,
             latestTimestamp = latest
         )
+    }
+
+    private fun requireReadSmsPermission(context: Context) {
+        if (!GatewayPermissionCenter.hasAllRuntimePermissions(context, GatewayPermissionCenter.readSmsPermissions())) {
+            error("missing permission: READ_SMS")
+        }
+    }
+
+    private fun requireSendSmsPermission(context: Context) {
+        if (!GatewayPermissionCenter.hasAllRuntimePermissions(context, GatewayPermissionCenter.sendSmsPermissions())) {
+            error("missing permission: SEND_SMS")
+        }
     }
 
     fun buildMessageId(deviceId: String, phone: String, content: String, timestamp: Long, direction: String, simSlotIndex: Int? = null): String {
@@ -815,6 +827,7 @@ object GatewayRuntime {
         simPhoneNumber: String?,
         simCount: Int?
     ) {
+        requireSendSmsPermission(context)
         val parts = smsManager.divideMessage(text)
         if (messageId.isNullOrBlank()) {
             if (parts.size <= 1) {

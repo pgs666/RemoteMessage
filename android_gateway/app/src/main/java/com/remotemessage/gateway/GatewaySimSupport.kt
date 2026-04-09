@@ -147,13 +147,15 @@ object GatewaySimSupport {
                 "${Telephony.Sms.DATE} DESC"
             )
         }.getOrElse {
-            context.contentResolver.query(
-                Telephony.Sms.CONTENT_URI,
-                baseProjection,
-                selection,
-                selectionArgs,
-                "${Telephony.Sms.DATE} DESC"
-            )
+            runCatching {
+                context.contentResolver.query(
+                    Telephony.Sms.CONTENT_URI,
+                    baseProjection,
+                    selection,
+                    selectionArgs,
+                    "${Telephony.Sms.DATE} DESC"
+                )
+            }.getOrNull()
         } ?: return resolveForSubscriptionId(snapshot, null)
 
         val directMatch = cursor.use {
@@ -172,13 +174,15 @@ object GatewaySimSupport {
                 "${Telephony.Sms.DATE} DESC"
             )
         }.getOrElse {
-            context.contentResolver.query(
-                Telephony.Sms.CONTENT_URI,
-                baseProjection,
-                "${Telephony.Sms.DATE} >= ?",
-                arrayOf(lowerBound.toString()),
-                "${Telephony.Sms.DATE} DESC"
-            )
+            runCatching {
+                context.contentResolver.query(
+                    Telephony.Sms.CONTENT_URI,
+                    baseProjection,
+                    "${Telephony.Sms.DATE} >= ?",
+                    arrayOf(lowerBound.toString()),
+                    "${Telephony.Sms.DATE} DESC"
+                )
+            }.getOrNull()
         }
         val broadMatch = broadCursor?.use {
             findMatchingSmsSubscription(it, content, timestamp, inbound)
@@ -201,14 +205,14 @@ object GatewaySimSupport {
         val snapshot = readSnapshot(context)
         if (snapshot.profiles.isEmpty()) {
             return if (isZh) {
-                "未检测到可用 SIM 信息，可手动填写自定义号码。"
+                "\u672A\u68C0\u6D4B\u5230\u53EF\u7528 SIM \u4FE1\u606F\uFF0C\u53EF\u624B\u52A8\u586B\u5199\u81EA\u5B9A\u4E49\u53F7\u7801\u3002"
             } else {
                 "No active SIM info detected. You can still enter custom phone numbers manually."
             }
         }
 
         return snapshot.profiles.joinToString("\n") { profile ->
-            val label = if (isZh) "卡${profile.slotIndex + 1}" else "SIM ${profile.slotIndex + 1}"
+            val label = if (isZh) "\u5361${profile.slotIndex + 1}" else "SIM ${profile.slotIndex + 1}"
             val display = profile.displayName.takeIf { it.isNotBlank() && !it.equals(label, ignoreCase = true) }
             val systemNumber = profile.systemPhoneNumber?.takeIf { it.isNotBlank() }
             val customNumber = profile.customPhoneNumber?.takeIf { it.isNotBlank() }
@@ -217,17 +221,17 @@ object GatewaySimSupport {
             buildString {
                 append(label)
                 display?.let { append(" ($it)") }
-                append(if (isZh) "：" else ": ")
+                append(if (isZh) "\uFF1A" else ": ")
                 append(
                     effectiveNumber
-                        ?: if (isZh) "未读取到号码" else "no number detected"
+                        ?: if (isZh) "\u672A\u8BFB\u53D6\u5230\u53F7\u7801" else "no number detected"
                 )
                 if (!systemNumber.isNullOrBlank() && systemNumber != effectiveNumber) {
-                    append(if (isZh) "，系统=" else ", system=")
+                    append(if (isZh) "\uFF0C\u7CFB\u7EDF=" else ", system=")
                     append(systemNumber)
                 }
                 if (!customNumber.isNullOrBlank()) {
-                    append(if (isZh) "，自定义=" else ", custom=")
+                    append(if (isZh) "\uFF0C\u81EA\u5B9A\u4E49=" else ", custom=")
                     append(customNumber)
                 }
             }
@@ -364,3 +368,4 @@ object GatewaySimSupport {
         return fromSubscriptionManager ?: fromInfo ?: fromTelephonyManager
     }
 }
+

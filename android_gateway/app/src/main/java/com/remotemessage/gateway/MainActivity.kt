@@ -1,6 +1,5 @@
 package com.remotemessage.gateway
 
-import android.Manifest
 import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
@@ -20,7 +19,6 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts.StartActivityForResult
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import fi.iki.elonen.NanoHTTPD
 
@@ -30,10 +28,9 @@ class MainActivity : ComponentActivity() {
     private var webUiServer: GatewayWebUiServer? = null
     private var statusTextView: TextView? = null
     private var syncProgressBar: ProgressBar? = null
-    private val realtimeSyncHandler = Handler(Looper.getMainLooper())
-    private var realtimeSyncRunnable: Runnable? = null
     private val syncAnimHandler = Handler(Looper.getMainLooper())
     private var syncAnimRunnable: Runnable? = null
+    private lateinit var permissionPref: SharedPreferences
 
     private val requestSmsRoleLauncher = registerForActivityResult(StartActivityForResult()) {
         statusTextView?.text = if (PermissionAndRoleHelper.isDefaultSmsApp(this)) {
@@ -42,9 +39,6 @@ class MainActivity : ComponentActivity() {
             getString(R.string.status_sms_role_requested)
         }
     }
-
-    @Volatile
-    private var realtimeSyncBusy = false
 
     private val importCertLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         val tv = statusTextView ?: return@registerForActivityResult
@@ -62,11 +56,38 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val requestRuntimePermissionsLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
+            val tv = statusTextView ?: return@registerForActivityResult
+            markPermissionsRequested(result.keys)
+            val denied = result.entries.filter { !it.value }.map { it.key }
+            if (denied.isEmpty()) {
+                tv.text = getString(R.string.status_runtime_permissions_granted)
+                return@registerForActivityResult
+            }
+            val permanentlyDenied = permanentlyDeniedPermissions(denied)
+            tv.text = if (permanentlyDenied.isEmpty()) {
+                getString(
+                    R.string.status_runtime_permissions_denied,
+                    GatewayPermissionCenter.summarizePermissions(denied)
+                )
+            } else {
+                getString(
+                    R.string.status_runtime_permissions_permanently_denied,
+                    GatewayPermissionCenter.summarizePermissions(permanentlyDenied)
+                )
+            }
+            if (permanentlyDenied.isNotEmpty()) {
+                showOpenAppSettingsDialog(tv, permanentlyDenied)
+            }
+        }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
 
         pref = getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
+        permissionPref = getSharedPreferences(PREF_PERMISSION_STATE, Context.MODE_PRIVATE)
         val editServer = findViewById<EditText>(R.id.editServer)
         val editDeviceId = findViewById<EditText>(R.id.editDeviceId)
         val editApiKey = findViewById<EditText>(R.id.editApiKey)
@@ -81,7 +102,7 @@ class MainActivity : ComponentActivity() {
         val btnTestLocalSms = findViewById<Button>(R.id.btnTestLocalSms)
         val btnFlushPending = findViewById<Button>(R.id.btnFlushPending)
         val btnImportCert = findViewById<Button>(R.id.btnImportCert)
-        val btnRequestSmsRole = findViewById<Button>(R.id.btnRequestSmsRole)
+        val btnPermissionTools = findViewById<Button>(R.id.btnPermissionTools)
         val btnOpenLogPage = findViewById<Button>(R.id.btnOpenLogPage)
         val btnGatewayDataTools = findViewById<Button>(R.id.btnGatewayDataTools)
         statusTextView = textStatus
@@ -95,14 +116,9 @@ class MainActivity : ComponentActivity() {
 
         RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
 
-        requestPermissionsIfNeeded()
-        PermissionAndRoleHelper.requestIgnoreBatteryOptimizations(this)
-        if (!PermissionAndRoleHelper.hasUsageAccess(this)) {
-            PermissionAndRoleHelper.openUsageAccessSettings(this)
-        }
         GatewaySyncWorker.schedule(this)
         startWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
-        startRealtimeSyncLoop(editServer, editDeviceId, editApiKey, textStatus)
+        GatewayForegroundService.start(this)
 
         btnSave.setOnClickListener {
             val serverText = editServer.text.toString().trim()
@@ -139,6 +155,7 @@ class MainActivity : ComponentActivity() {
                 deviceId = deviceIdText
             )
             GatewaySyncWorker.schedule(this)
+            GatewayForegroundService.start(this)
             restartWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
             textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
             textStatus.text = getString(R.string.status_saved_auto_sync)
@@ -163,9 +180,13 @@ class MainActivity : ComponentActivity() {
                 }
             }
             GatewaySyncWorker.schedule(this)
+            GatewayForegroundService.start(this)
         }
 
         btnPollOnce.setOnClickListener {
+            if (!ensureRuntimePermissionsForAction(textStatus, GatewayPermissionCenter.sendSmsPermissions())) {
+                return@setOnClickListener
+            }
             showProgress(indeterminate = true)
             val cfg = GatewayConfig(
                 serverBaseUrl = editServer.text.toString().trim(),
@@ -180,6 +201,9 @@ class MainActivity : ComponentActivity() {
         }
 
         btnSyncHistory.setOnClickListener {
+            if (!ensureRuntimePermissionsForAction(textStatus, GatewayPermissionCenter.readSmsPermissions())) {
+                return@setOnClickListener
+            }
             showProgress(indeterminate = false, progress = 0, max = 1)
             textStatus.text = getString(R.string.status_history_sync_preparing)
             val cfg = GatewayConfig(
@@ -204,6 +228,9 @@ class MainActivity : ComponentActivity() {
         }
 
         btnTestLocalSms.setOnClickListener {
+            if (!ensureRuntimePermissionsForAction(textStatus, GatewayPermissionCenter.readSmsPermissions())) {
+                return@setOnClickListener
+            }
             GatewayRuntime.inspectLocalSmsAccess(this) {
                 runOnUiThread { textStatus.text = it }
             }
@@ -234,18 +261,8 @@ class MainActivity : ComponentActivity() {
             importCertLauncher.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "*/*"))
         }
 
-        btnRequestSmsRole.setOnClickListener {
-            val intent = PermissionAndRoleHelper.buildRequestDefaultSmsRoleIntent(this)
-            if (intent != null) {
-                requestSmsRoleLauncher.launch(intent)
-                textStatus.text = getString(R.string.status_sms_role_requested)
-            } else {
-                textStatus.text = if (PermissionAndRoleHelper.isDefaultSmsApp(this)) {
-                    getString(R.string.status_sms_role_held)
-                } else {
-                    getString(R.string.status_sms_role_unavailable)
-                }
-            }
+        btnPermissionTools.setOnClickListener {
+            showPermissionToolsDialog(textStatus)
         }
 
         btnOpenLogPage.setOnClickListener {
@@ -261,6 +278,186 @@ class MainActivity : ComponentActivity() {
                 textStatus = textStatus
             )
         }
+    }
+
+    private fun showPermissionToolsDialog(textStatus: TextView) {
+        val items = arrayOf(
+            getString(R.string.item_request_runtime_permissions),
+            getString(R.string.item_request_default_sms_role),
+            getString(R.string.item_request_usage_access),
+            getString(R.string.item_request_battery_optimization),
+            getString(R.string.item_view_permission_status),
+            getString(R.string.item_open_app_settings)
+        )
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.title_permission_tools))
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> requestMissingRuntimePermissions(textStatus)
+                    1 -> requestDefaultSmsRole(textStatus)
+                    2 -> requestUsageAccess(textStatus)
+                    3 -> requestIgnoreBatteryOptimizations(textStatus)
+                    4 -> textStatus.text = buildPermissionStatusSummary()
+                    5 -> openAppSettings(textStatus)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun ensureRuntimePermissionsForAction(textStatus: TextView, required: List<String>): Boolean {
+        val missing = GatewayPermissionCenter.missingRuntimePermissions(this, required)
+        if (missing.isEmpty()) {
+            return true
+        }
+        val permanentlyDenied = permanentlyDeniedPermissions(missing)
+        if (permanentlyDenied.isNotEmpty()) {
+            textStatus.text = getString(
+                R.string.status_runtime_permissions_permanently_denied,
+                GatewayPermissionCenter.summarizePermissions(permanentlyDenied)
+            )
+            showOpenAppSettingsDialog(textStatus, permanentlyDenied)
+            return false
+        }
+        textStatus.text = getString(
+            R.string.status_runtime_permissions_missing,
+            GatewayPermissionCenter.summarizePermissions(missing)
+        )
+        launchRuntimePermissionRequest(missing)
+        return false
+    }
+
+    private fun requestMissingRuntimePermissions(textStatus: TextView) {
+        val missing = PermissionAndRoleHelper.missingRuntimePermissions(this)
+        if (missing.isEmpty()) {
+            textStatus.text = getString(R.string.status_runtime_permissions_granted)
+            return
+        }
+        textStatus.text = getString(
+            R.string.status_runtime_permission_request_started,
+            GatewayPermissionCenter.summarizePermissions(missing)
+        )
+        val permanentlyDenied = permanentlyDeniedPermissions(missing)
+        if (permanentlyDenied.isNotEmpty()) {
+            textStatus.text = getString(
+                R.string.status_runtime_permissions_permanently_denied,
+                GatewayPermissionCenter.summarizePermissions(permanentlyDenied)
+            )
+            showOpenAppSettingsDialog(textStatus, permanentlyDenied)
+            return
+        }
+        launchRuntimePermissionRequest(missing)
+    }
+
+    private fun requestDefaultSmsRole(textStatus: TextView) {
+        val intent = PermissionAndRoleHelper.buildRequestDefaultSmsRoleIntent(this)
+        if (intent != null) {
+            requestSmsRoleLauncher.launch(intent)
+            textStatus.text = getString(R.string.status_sms_role_requested)
+        } else {
+            textStatus.text = if (PermissionAndRoleHelper.isDefaultSmsApp(this)) {
+                getString(R.string.status_sms_role_held)
+            } else {
+                getString(R.string.status_sms_role_unavailable)
+            }
+        }
+    }
+
+    private fun requestUsageAccess(textStatus: TextView) {
+        if (PermissionAndRoleHelper.hasUsageAccess(this)) {
+            textStatus.text = getString(R.string.status_usage_access_granted)
+            return
+        }
+        PermissionAndRoleHelper.openUsageAccessSettings(this)
+        textStatus.text = getString(R.string.status_usage_access_requested)
+    }
+
+    private fun requestIgnoreBatteryOptimizations(textStatus: TextView) {
+        PermissionAndRoleHelper.requestIgnoreBatteryOptimizations(this)
+        textStatus.text = getString(R.string.status_battery_optimization_requested)
+    }
+
+    private fun openAppSettings(textStatus: TextView) {
+        PermissionAndRoleHelper.openAppDetailsSettings(this)
+        textStatus.text = getString(R.string.status_app_settings_opened)
+    }
+
+    private fun buildPermissionStatusSummary(): String {
+        val missingRuntime = PermissionAndRoleHelper.missingRuntimePermissions(this)
+        val runtimeSummary = if (missingRuntime.isEmpty()) {
+            getString(R.string.status_runtime_permissions_granted)
+        } else {
+            getString(
+                R.string.status_runtime_permissions_missing,
+                GatewayPermissionCenter.summarizePermissions(missingRuntime)
+            )
+        }
+        val smsRole = if (PermissionAndRoleHelper.isDefaultSmsApp(this)) {
+            getString(R.string.status_sms_role_held)
+        } else {
+            getString(R.string.status_sms_role_not_held)
+        }
+        val usageAccess = if (PermissionAndRoleHelper.hasUsageAccess(this)) {
+            getString(R.string.status_usage_access_granted)
+        } else {
+            getString(R.string.status_usage_access_not_granted)
+        }
+        return listOf(runtimeSummary, smsRole, usageAccess).joinToString("\n")
+    }
+
+    private fun launchRuntimePermissionRequest(permissions: Collection<String>) {
+        val uniquePermissions = permissions.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (uniquePermissions.isEmpty()) {
+            return
+        }
+        markPermissionsRequested(uniquePermissions)
+        requestRuntimePermissionsLauncher.launch(uniquePermissions.toTypedArray())
+    }
+
+    private fun permanentlyDeniedPermissions(permissions: Collection<String>): List<String> {
+        return permissions
+            .filter { permission ->
+                ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED
+            }
+            .filter { permission ->
+                wasPermissionRequested(permission) && !shouldShowRequestPermissionRationale(permission)
+            }
+    }
+
+    private fun markPermissionsRequested(permissions: Collection<String>) {
+        val filtered = permissions.map { it.trim() }.filter { it.isNotEmpty() }.distinct()
+        if (filtered.isEmpty()) {
+            return
+        }
+        val editor = permissionPref.edit()
+        filtered.forEach { permission ->
+            editor.putBoolean(permissionRequestedKey(permission), true)
+        }
+        editor.apply()
+    }
+
+    private fun wasPermissionRequested(permission: String): Boolean {
+        return permissionPref.getBoolean(permissionRequestedKey(permission), false)
+    }
+
+    private fun permissionRequestedKey(permission: String): String {
+        return "requested_" + permission.replace('.', '_')
+    }
+
+    private fun showOpenAppSettingsDialog(textStatus: TextView, permissions: Collection<String>) {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.title_permission_settings_required))
+            .setMessage(
+                getString(
+                    R.string.message_permission_settings_required,
+                    GatewayPermissionCenter.summarizePermissions(permissions)
+                )
+            )
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(R.string.action_open_app_settings) { _, _ ->
+                openAppSettings(textStatus)
+            }
+            .show()
     }
 
     private fun showGatewayDataToolsDialog(
@@ -457,69 +654,6 @@ class MainActivity : ComponentActivity() {
         startWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
     }
 
-    private fun startRealtimeSyncLoop(
-        editServer: EditText,
-        editDeviceId: EditText,
-        editApiKey: EditText,
-        textStatus: TextView
-    ) {
-        stopRealtimeSyncLoop()
-
-        val runnable = object : Runnable {
-            override fun run() {
-                if (!realtimeSyncBusy && !isFinishing && !isDestroyed) {
-                    val cfg = GatewayConfig(
-                        serverBaseUrl = editServer.text.toString().trim(),
-                        deviceId = editDeviceId.text.toString().trim()
-                    )
-                    RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
-
-                    if (cfg.serverBaseUrl.isNotBlank() && cfg.deviceId.isNotBlank()) {
-                        realtimeSyncBusy = true
-                        Thread {
-                            try {
-                                runCatching {
-                                    GatewayRuntime.pushSimStateSync(this@MainActivity, cfg)
-                                }.onFailure {
-                                    GatewayDebugLog.add(this@MainActivity, "Realtime sync step failed: pushSimStateSync: ${it.message}")
-                                }
-
-                                runCatching {
-                                    GatewayRuntime.flushPendingUploads(this@MainActivity, cfg)
-                                }.onFailure {
-                                    GatewayDebugLog.add(this@MainActivity, "Realtime sync step failed: flushPendingUploads: ${it.message}")
-                                }
-
-                                runCatching {
-                                    GatewayRuntime.pollAndSendSync(this@MainActivity, cfg)
-                                }.onSuccess { result ->
-                                    if (result != "No pending message") {
-                                        runOnUiThread { textStatus.text = result }
-                                    }
-                                }.onFailure {
-                                    GatewayDebugLog.add(this@MainActivity, "Realtime sync step failed: pollAndSendSync: ${it.message}")
-                                }
-                            } finally {
-                                realtimeSyncBusy = false
-                            }
-                        }.start()
-                    }
-                }
-
-                realtimeSyncHandler.postDelayed(this, 5_000)
-            }
-        }
-
-        realtimeSyncRunnable = runnable
-        realtimeSyncHandler.postDelayed(runnable, 3_000)
-    }
-
-    private fun stopRealtimeSyncLoop() {
-        realtimeSyncRunnable?.let { realtimeSyncHandler.removeCallbacks(it) }
-        realtimeSyncRunnable = null
-        realtimeSyncBusy = false
-    }
-
     private fun showProgress(indeterminate: Boolean, progress: Int = 0, max: Int = 100) {
         showProgress(indeterminate, progress, max, animate = false)
     }
@@ -592,30 +726,12 @@ class MainActivity : ComponentActivity() {
 
     override fun onDestroy() {
         stopProgressPulse()
-        stopRealtimeSyncLoop()
         webUiServer?.stop()
         webUiServer = null
         super.onDestroy()
     }
 
-    private fun requestPermissionsIfNeeded() {
-        val perms = mutableListOf(
-            Manifest.permission.RECEIVE_SMS,
-            Manifest.permission.READ_SMS,
-            Manifest.permission.SEND_SMS,
-            Manifest.permission.READ_PHONE_STATE
-        )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            perms.add(Manifest.permission.READ_PHONE_NUMBERS)
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            perms.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-        val need = perms.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (need.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, need.toTypedArray(), 1001)
-        }
+    companion object {
+        private const val PREF_PERMISSION_STATE = "gateway_permission_state"
     }
 }

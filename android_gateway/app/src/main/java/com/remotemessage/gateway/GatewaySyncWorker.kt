@@ -36,6 +36,11 @@ class GatewaySyncWorker(
             GatewayDebugLog.add(applicationContext, "Worker step failed: flushPendingUploads: ${it.message}")
         }
 
+        if (!GatewayPermissionCenter.hasAllRuntimePermissions(applicationContext, GatewayPermissionCenter.sendSmsPermissions())) {
+            GatewayDebugLog.add(applicationContext, "Worker skipped poll/send: missing SEND_SMS permission")
+            return Result.success()
+        }
+
         return runCatching {
             GatewayRuntime.pollAndSendSync(applicationContext, cfg)
             Result.success()

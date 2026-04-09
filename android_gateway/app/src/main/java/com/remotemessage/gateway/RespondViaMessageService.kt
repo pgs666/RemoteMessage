@@ -21,6 +21,11 @@ class RespondViaMessageService : Service() {
     }
 
     private fun handleIntent(intent: Intent) {
+        if (!GatewayPermissionCenter.hasAllRuntimePermissions(this, GatewayPermissionCenter.sendSmsPermissions())) {
+            GatewayDebugLog.add(this, "RespondViaMessage skipped: missing SEND_SMS permission")
+            return
+        }
+
         val body = intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
             ?.takeIf { it.isNotEmpty() }
             ?: intent.getStringExtra("sms_body")?.trim()
