@@ -32,7 +32,7 @@ jobs:
           mkdir -p android_gateway/signing
           echo "$ANDROID_GATEWAY_KEYSTORE_BASE64" | base64 -d > android_gateway/signing/ci-signing.jks
 
-      - name: Build Debug APK
+      - name: Build Release APK
         env:
           ANDROID_KEYSTORE_PATH: ${{ github.workspace }}/android_gateway/signing/ci-signing.jks
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_GATEWAY_KEY_ALIAS }}
@@ -40,10 +40,10 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_GATEWAY_KEY_PASSWORD }}
           ANDROID_GATEWAY_VERSION_CODE: ${{ github.run_number }}
           ANDROID_GATEWAY_VERSION_NAME: ci-${{ github.run_number }}
-        run: gradle -p android_gateway :app:assembleDebug
+        run: gradle -p android_gateway :app:assembleRelease
 
       - name: Upload APKs
         uses: actions/upload-artifact@v4
         with:
-          name: android-gateway-debug-apk
-          path: android_gateway/app/build/outputs/apk/debug/*.apk
+          name: android-gateway-release-apk
+          path: android_gateway/app/build/outputs/apk/release/*.apk
