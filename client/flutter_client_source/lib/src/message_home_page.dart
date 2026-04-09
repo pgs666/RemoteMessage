@@ -1,7 +1,9 @@
-﻿import 'dart:convert';
+﻿import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_contacts/flutter_contacts.dart';
 
 import 'app_data.dart';
 import 'compose_message_page.dart';
@@ -21,20 +23,25 @@ class MessageHomePage extends StatefulWidget {
   State<MessageHomePage> createState() => _MessageHomePageState();
 }
 
-class _MessageHomePageState extends State<MessageHomePage> {
+class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingObserver {
+  static const _autoRefreshInterval = Duration(seconds: 20);
+
   late final TextEditingController _serverCtrl;
   late final TextEditingController _deviceCtrl;
   final _searchCtrl = TextEditingController();
   final _composerCtrl = TextEditingController();
+  final _composerFocusNode = FocusNode();
   final _chatScrollCtrl = ScrollController();
   final ValueNotifier<int> _uiRefreshTick = ValueNotifier(0);
 
-  final LocalDatabase _db = LocalDatabase();
+  LocalDatabase? _db;
+  Timer? _autoRefreshTimer;
+
   bool _loading = false;
   bool _syncingNow = false;
-  String _status = 'Ready';
   String _search = '';
   String? _activePhone;
+  String _activeProfileId = 'default';
   int _lastSyncTs = 0;
   double? _syncProgress;
   List<ConversationSummary> _conversationCache = const [];
@@ -42,53 +49,127 @@ class _MessageHomePageState extends State<MessageHomePage> {
   List<DeviceSimProfile> _gatewaySimProfiles = const [];
   int? _selectedSendSimSlot;
 
+  bool _contactsLoading = false;
+  bool _contactsGranted = false;
+  Map<String, String> _contactNameByPhoneKey = const {};
+
   bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
   bool get _showSimSelection => _gatewaySimProfiles.length > 1;
 
+  LocalDatabase get _localDb {
+    final db = _db;
+    if (db == null) {
+      throw StateError('Local database is not initialized.');
+    }
+    return db;
+  }
+
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _serverCtrl = TextEditingController(text: widget.settings.serverBaseUrl);
     _deviceCtrl = TextEditingController(text: widget.settings.deviceId);
     _searchCtrl.addListener(() {
       _search = _searchCtrl.text.trim().toLowerCase();
       _refreshLocalCaches();
     });
+    _composerFocusNode.addListener(() {
+      if (_composerFocusNode.hasFocus) {
+        _scrollChatToBottomSoon();
+      }
+    });
     _bootstrap();
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _stopAutoRefresh();
     _uiRefreshTick.dispose();
     _chatScrollCtrl.dispose();
+    _composerFocusNode.dispose();
     _serverCtrl.dispose();
     _deviceCtrl.dispose();
     _searchCtrl.dispose();
     _composerCtrl.dispose();
+    _db?.close();
     super.dispose();
+  }
+
+  @override
+  void didChangeMetrics() {
+    _scrollChatToBottomSoon();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _startAutoRefresh();
+      if (_contactNameByPhoneKey.isEmpty) {
+        _loadContacts();
+      }
+    } else if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+      _stopAutoRefresh();
+    }
+  }
+
+  void _startAutoRefresh() {
+    if (_autoRefreshTimer != null) return;
+    _autoRefreshTimer = Timer.periodic(_autoRefreshInterval, (_) async {
+      if (!mounted || _syncingNow) return;
+      await _syncInbox(fullSync: false, interactive: false);
+    });
+  }
+
+  void _stopAutoRefresh() {
+    _autoRefreshTimer?.cancel();
+    _autoRefreshTimer = null;
   }
 
   Future<void> _bootstrap() async {
     setState(() {
       _loading = true;
-      _status = tr('初始化中...', 'Initializing...');
       _syncProgress = null;
     });
 
     await widget.settings.load();
+    _activeProfileId = widget.settings.activeProfileId;
     _serverCtrl.text = widget.settings.serverBaseUrl;
     _deviceCtrl.text = widget.settings.deviceId;
-    await _db.init();
-    _lastSyncTs = await _db.getMetaInt('lastSyncTs') ?? 0;
-    _activePhone = await _db.getMetaString('activePhone');
-    _selectedSendSimSlot = await _db.getMetaInt('selectedSendSimSlot');
-    await _refreshLocalCaches();
+
+    await _openLocalDbForProfile(_activeProfileId, clearUiFirst: false);
     await _refreshGatewaySimProfiles(interactive: false);
+    await _loadContacts();
     await _syncInbox(fullSync: true, interactive: true);
+    _startAutoRefresh();
+
     if (mounted) {
       setState(() => _loading = false);
     }
+  }
+
+  Future<void> _openLocalDbForProfile(String profileId, {required bool clearUiFirst}) async {
+    if (clearUiFirst && mounted) {
+      setState(() {
+        _conversationCache = const [];
+        _activeMessageCache = const [];
+        _activePhone = null;
+        _syncProgress = null;
+      });
+    }
+
+    await _db?.close();
+    final nextDb = LocalDatabase(profileId: profileId);
+    await nextDb.init();
+    _db = nextDb;
+    _activeProfileId = profileId;
+
+    _lastSyncTs = await _localDb.getMetaInt('lastSyncTs') ?? 0;
+    _activePhone = await _localDb.getMetaString('activePhone');
+    _selectedSendSimSlot = await _localDb.getMetaInt('selectedSendSimSlot');
+    await _refreshLocalCaches();
   }
 
   Future<void> _showToastStatus(String text, {bool error = false}) async {
@@ -110,7 +191,8 @@ class _MessageHomePageState extends State<MessageHomePage> {
   }
 
   Future<void> _refreshLocalCaches() async {
-    final conversations = await _db.getConversationSummaries(search: _search);
+    if (_db == null) return;
+    final conversations = await _localDb.getConversationSummaries(search: _search);
     var nextActivePhone = _activePhone;
 
     if (conversations.isNotEmpty) {
@@ -125,11 +207,11 @@ class _MessageHomePageState extends State<MessageHomePage> {
     if (nextActivePhone != _activePhone) {
       _activePhone = nextActivePhone;
       if (_activePhone != null) {
-        await _db.setMetaString('activePhone', _activePhone!);
+        await _localDb.setMetaString('activePhone', _activePhone!);
       }
     }
 
-    final messages = _activePhone == null ? const <SmsItem>[] : await _db.getMessagesByPhone(_activePhone!);
+    final messages = _activePhone == null ? const <SmsItem>[] : await _localDb.getMessagesByPhone(_activePhone!);
     if (!mounted) return;
 
     setState(() {
@@ -141,9 +223,10 @@ class _MessageHomePageState extends State<MessageHomePage> {
   }
 
   Future<void> _setActivePhone(String? phone) async {
+    if (_db == null) return;
     _activePhone = phone;
     if (phone != null) {
-      await _db.setMetaString('activePhone', phone);
+      await _localDb.setMetaString('activePhone', phone);
     }
     await _refreshLocalCaches();
   }
@@ -162,47 +245,61 @@ class _MessageHomePageState extends State<MessageHomePage> {
   Future<void> _openSettings() async {
     final result = await Navigator.push<SettingsResult>(
       context,
-      MaterialPageRoute(builder: (_) => SettingsPage(settings: widget.settings)),
+      MaterialPageRoute(
+        builder: (_) => SettingsPage(
+          settings: widget.settings,
+          simProfiles: _gatewaySimProfiles,
+        ),
+      ),
     );
     if (result == null) return;
 
     _serverCtrl.text = result.serverBaseUrl;
     _deviceCtrl.text = result.deviceId;
+    widget.settings.serverBaseUrl = result.serverBaseUrl;
+    widget.settings.deviceId = result.deviceId;
     widget.settings.password = result.password;
     widget.onThemeChanged(result.themeMode);
-    _status = tr('设置已更新', 'Settings updated');
+
+    final profileChanged = result.activeProfileId != _activeProfileId;
+    if (profileChanged) {
+      _searchCtrl.clear();
+      _search = '';
+      await _openLocalDbForProfile(result.activeProfileId, clearUiFirst: true);
+      await _showToastStatus(tr('已切换配置，正在加载对应短信...', 'Profile switched. Loading profile messages...'));
+    }
+
     await _refreshGatewaySimProfiles(interactive: false);
+
     if (result.clearLocalDatabase) {
       await _clearLocalDatabase();
       return;
     }
+
     await _syncInbox(fullSync: true, interactive: true);
   }
 
   Future<void> _clearLocalDatabase() async {
-    if (!mounted) return;
+    if (!mounted || _db == null) return;
     setState(() {
       _loading = true;
       _syncProgress = null;
-      _status = tr('正在清空本地数据库...', 'Clearing local database...');
     });
 
     try {
-      await _db.clearAllUserData();
+      await _localDb.clearAllUserData();
       _lastSyncTs = 0;
       _activePhone = null;
       _selectedSendSimSlot = _gatewaySimProfiles.isNotEmpty ? _gatewaySimProfiles.first.slotIndex : null;
       if (_selectedSendSimSlot != null) {
-        await _db.setMetaInt('selectedSendSimSlot', _selectedSendSimSlot!);
+        await _localDb.setMetaInt('selectedSendSimSlot', _selectedSendSimSlot!);
       }
       await _refreshLocalCaches();
       if (!mounted) return;
-      _status = tr('本地数据库已清空', 'Local database cleared');
-      await _showToastStatus(_status);
+      await _showToastStatus(tr('本地数据库已清空', 'Local database cleared'));
     } catch (e) {
       if (!mounted) return;
-      _status = '${tr('清空失败', 'Clear failed')}: $e';
-      await _showToastStatus(_status, error: true);
+      await _showToastStatus('${tr('清空失败', 'Clear failed')}: $e', error: true);
     } finally {
       if (mounted) {
         setState(() => _loading = false);
@@ -234,8 +331,8 @@ class _MessageHomePageState extends State<MessageHomePage> {
         selected = list.first.slotIndex;
       }
       _selectedSendSimSlot = selected;
-      if (selected != null) {
-        await _db.setMetaInt('selectedSendSimSlot', selected);
+      if (selected != null && _db != null) {
+        await _localDb.setMetaInt('selectedSendSimSlot', selected);
       }
 
       if (!mounted) return;
@@ -250,7 +347,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
   }
 
   Future<void> _syncInbox({bool fullSync = false, bool interactive = true}) async {
-    if (_syncingNow) return;
+    if (_syncingNow || _db == null) return;
 
     final server = _serverCtrl.text.trim();
     if (server.isEmpty) return;
@@ -260,7 +357,6 @@ class _MessageHomePageState extends State<MessageHomePage> {
       setState(() {
         _loading = true;
         _syncProgress = null;
-        _status = fullSync ? tr('加载完整历史中...', 'Loading full history...') : tr('正在同步新消息...', 'Syncing new messages...');
       });
     }
 
@@ -272,7 +368,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
 
       await _refreshGatewaySimProfiles(interactive: false);
 
-      final added = await _db.upsertMessages(
+      final added = await _localDb.upsertMessages(
         list,
         onProgress: interactive
             ? (done, total) {
@@ -288,7 +384,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
         final cursorTs = item.syncCursorTs;
         if (cursorTs > _lastSyncTs) _lastSyncTs = cursorTs;
       }
-      await _db.setMetaInt('lastSyncTs', _lastSyncTs);
+      await _localDb.setMetaInt('lastSyncTs', _lastSyncTs);
       await _refreshLocalCaches();
 
       if (interactive && mounted) {
@@ -312,7 +408,8 @@ class _MessageHomePageState extends State<MessageHomePage> {
   }
 
   Future<void> _setPin(String phone, bool pin) async {
-    await _db.setPinned(phone, pin);
+    if (_db == null) return;
+    await _localDb.setPinned(phone, pin);
     await _refreshLocalCaches();
     try {
       final server = _serverCtrl.text.trim();
@@ -321,7 +418,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
         'pinned': pin,
       }, password: widget.settings.password);
     } catch (_) {
-      // ignore remote failure; local pin still works
+      // keep local pin even if remote call fails
     }
   }
 
@@ -378,13 +475,15 @@ class _MessageHomePageState extends State<MessageHomePage> {
         selected = null;
       }
       _selectedSendSimSlot = selected;
-      if (selected != null) {
-        await _db.setMetaInt('selectedSendSimSlot', selected);
+      if (selected != null && _db != null) {
+        await _localDb.setMetaInt('selectedSendSimSlot', selected);
       }
     }
 
     _activePhone = draft.phone;
-    await _db.setMetaString('activePhone', draft.phone);
+    if (_db != null) {
+      await _localDb.setMetaString('activePhone', draft.phone);
+    }
     _composerCtrl.text = draft.message;
     await _sendSmsToActive();
   }
@@ -426,10 +525,84 @@ class _MessageHomePageState extends State<MessageHomePage> {
     }
   }
 
+  Future<void> _loadContacts() async {
+    if (!(Platform.isAndroid || Platform.isIOS)) return;
+    if (_contactsLoading) return;
+
+    _contactsLoading = true;
+    try {
+      final granted = await FlutterContacts.requestPermission(readonly: true);
+      if (!granted) {
+        if (!mounted) return;
+        setState(() {
+          _contactsGranted = false;
+          _contactNameByPhoneKey = const {};
+        });
+        return;
+      }
+
+      final contacts = await FlutterContacts.getContacts(withProperties: true);
+      final map = <String, String>{};
+      for (final c in contacts) {
+        final name = c.displayName.trim();
+        if (name.isEmpty) continue;
+        for (final phone in c.phones) {
+          for (final key in _buildPhoneMatchKeys(phone.number)) {
+            map.putIfAbsent(key, () => name);
+          }
+        }
+      }
+
+      if (!mounted) return;
+      setState(() {
+        _contactsGranted = true;
+        _contactNameByPhoneKey = map;
+      });
+      _uiRefreshTick.value++;
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _contactsGranted = false;
+        _contactNameByPhoneKey = const {};
+      });
+    } finally {
+      _contactsLoading = false;
+    }
+  }
+
+  Set<String> _buildPhoneMatchKeys(String raw) {
+    var normalized = raw.trim();
+    if (normalized.isEmpty) return const {};
+    normalized = normalized.replaceAll(RegExp(r'[^\d+]'), '');
+    if (normalized.startsWith('00')) {
+      normalized = '+${normalized.substring(2)}';
+    }
+    final digits = normalized.replaceAll(RegExp(r'[^\d]'), '');
+    if (digits.isEmpty) return const {};
+
+    final keys = <String>{digits};
+    if (_isZh) {
+      if (digits.startsWith('86') && digits.length > 11) {
+        keys.add(digits.substring(2));
+      }
+      if (!digits.startsWith('86')) {
+        keys.add('86$digits');
+      }
+      if (digits.length >= 11) {
+        keys.add(digits.substring(digits.length - 11));
+      }
+    }
+    return keys;
+  }
+
   String _displayConversationTitle(String phone) {
-    final idx = _conversationCache.indexWhere((c) => c.phone == phone);
-    if (idx < 0) return tr('联系人', 'Contact');
-    return tr('联系人 ${idx + 1}', 'Contact ${idx + 1}');
+    for (final key in _buildPhoneMatchKeys(phone)) {
+      final name = _contactNameByPhoneKey[key];
+      if (name != null && name.trim().isNotEmpty) {
+        return name.trim();
+      }
+    }
+    return phone;
   }
 
   Widget _buildConversationList({required bool openChatOnTap}) {
@@ -501,17 +674,20 @@ class _MessageHomePageState extends State<MessageHomePage> {
       initialValue: _selectedSendSimSlot,
       onSelected: (value) async {
         setState(() => _selectedSendSimSlot = value);
-        await _db.setMetaInt('selectedSendSimSlot', value);
+        if (_db != null) {
+          await _localDb.setMetaInt('selectedSendSimSlot', value);
+        }
       },
       itemBuilder: (_) => _gatewaySimProfiles
           .map((sim) => PopupMenuItem<int>(value: sim.slotIndex, child: Text(_displaySimLabel(sim.slotIndex))))
           .toList(),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         margin: const EdgeInsets.only(right: 4),
         decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(999),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -531,7 +707,11 @@ class _MessageHomePageState extends State<MessageHomePage> {
         Container(
           width: double.infinity,
           padding: const EdgeInsets.all(12),
-          child: Text(_activePhone == null ? tr('请选择会话', 'Select conversation') : _displayConversationTitle(_activePhone!)),
+          child: Text(
+            _activePhone == null ? tr('请选择会话', 'Select conversation') : _displayConversationTitle(_activePhone!),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
         ),
         const Divider(height: 1),
         Expanded(
@@ -542,6 +722,8 @@ class _MessageHomePageState extends State<MessageHomePage> {
               if (messages.isEmpty) return Center(child: Text(tr('暂无消息', 'No messages')));
               return ListView.builder(
                 controller: _chatScrollCtrl,
+                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                padding: const EdgeInsets.symmetric(vertical: 8),
                 itemCount: messages.length,
                 itemBuilder: (context, index) {
                   final m = messages[index];
@@ -556,7 +738,7 @@ class _MessageHomePageState extends State<MessageHomePage> {
                       constraints: const BoxConstraints(maxWidth: 460),
                       decoration: BoxDecoration(
                         color: mine ? Theme.of(context).colorScheme.primaryContainer : Theme.of(context).colorScheme.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius: BorderRadius.circular(16),
                       ),
                       child: Column(
                         crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
@@ -592,28 +774,51 @@ class _MessageHomePageState extends State<MessageHomePage> {
           ),
         ),
         const Divider(height: 1),
-        Padding(
-          padding: const EdgeInsets.all(8),
-          child: Row(
-            children: [
-              Expanded(
-                child: TextField(
-                  controller: _composerCtrl,
-                  minLines: 1,
-                  maxLines: 4,
-                  decoration: InputDecoration(
-                    hintText: tr('输入消息...', 'Type a message...'),
-                    border: const OutlineInputBorder(),
-                    suffixIcon: _showSimSelection ? _buildSimSelectorInComposer() : null,
-                    suffixIconConstraints: const BoxConstraints(minWidth: 68, maxWidth: 124),
+        SafeArea(
+          top: false,
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(8, 8, 8, 8),
+            child: Row(
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _composerCtrl,
+                    focusNode: _composerFocusNode,
+                    minLines: 1,
+                    maxLines: 4,
+                    decoration: InputDecoration(
+                      hintText: tr('输入消息...', 'Type a message...'),
+                      filled: true,
+                      fillColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      border: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(999),
+                        borderSide: BorderSide.none,
+                      ),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(999),
+                        borderSide: BorderSide.none,
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(999),
+                        borderSide: BorderSide(color: Theme.of(context).colorScheme.primary, width: 1.4),
+                      ),
+                      suffixIcon: _showSimSelection ? _buildSimSelectorInComposer() : null,
+                      suffixIconConstraints: const BoxConstraints(minWidth: 72, maxWidth: 140),
+                    ),
+                    onTap: _scrollChatToBottomSoon,
                   ),
                 ),
-              ),
-              const SizedBox(width: 8),
-              FilledButton(onPressed: _loading ? null : _sendSmsToActive, child: Text(tr('发送', 'Send'))),
-            ],
+                const SizedBox(width: 8),
+                FilledButton(
+                  onPressed: _loading ? null : _sendSmsToActive,
+                  style: FilledButton.styleFrom(shape: const CircleBorder(), padding: const EdgeInsets.all(14)),
+                  child: const Icon(Icons.send),
+                ),
+              ],
+            ),
           ),
-        )
+        ),
       ],
     );
   }
@@ -645,13 +850,13 @@ class _MessageHomePageState extends State<MessageHomePage> {
     if (item.direction != 'outbound') return null;
     switch (item.sendStatus) {
       case 'queued':
-        return '[Queued]';
+        return tr('[排队]', '[Queued]');
       case 'dispatched':
-        return '[Dispatching]';
+        return tr('[网关接收]', '[Dispatching]');
       case 'sent':
-        return '[Sent]';
+        return tr('[已发送]', '[Sent]');
       case 'failed':
-        return '[Failed]';
+        return tr('[失败]', '[Failed]');
       default:
         return null;
     }
@@ -717,6 +922,17 @@ class _MessageHomePageState extends State<MessageHomePage> {
               padding: const EdgeInsets.symmetric(horizontal: 12),
               child: LinearProgressIndicator(value: _syncProgress),
             ),
+          if (!_contactsGranted && (Platform.isAndroid || Platform.isIOS))
+            Padding(
+              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  tr('联系人权限未开启，列表将显示号码。', 'Contacts permission is off, phone numbers will be shown.'),
+                  style: Theme.of(context).textTheme.bodySmall,
+                ),
+              ),
+            ),
           Expanded(
             child: LayoutBuilder(
               builder: (context, constraints) {
@@ -757,11 +973,23 @@ class MobileChatPage extends StatefulWidget {
 
 class _MobileChatPageState extends State<MobileChatPage> {
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      widget.parent._setActivePhone(widget.phone);
+      widget.parent._scrollChatToBottomSoon();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    widget.parent._activePhone = widget.phone;
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(title: Text(widget.parent._displayConversationTitle(widget.phone))),
       body: widget.parent._buildChatPanel(),
     );
   }
 }
+
+
+

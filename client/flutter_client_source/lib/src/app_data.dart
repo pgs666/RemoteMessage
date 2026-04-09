@@ -121,30 +121,169 @@ class ConversationSummary {
   });
 }
 
+class AppServerProfile {
+  final String id;
+  final String name;
+  final String serverBaseUrl;
+  final String deviceId;
+  final String password;
+  final int updatedAt;
+
+  const AppServerProfile({
+    required this.id,
+    required this.name,
+    required this.serverBaseUrl,
+    required this.deviceId,
+    required this.password,
+    required this.updatedAt,
+  });
+
+  AppServerProfile copyWith({
+    String? id,
+    String? name,
+    String? serverBaseUrl,
+    String? deviceId,
+    String? password,
+    int? updatedAt,
+  }) {
+    return AppServerProfile(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      serverBaseUrl: serverBaseUrl ?? this.serverBaseUrl,
+      deviceId: deviceId ?? this.deviceId,
+      password: password ?? this.password,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+}
+
 class AppSettingsStore {
   String serverBaseUrl = 'https://127.0.0.1:5001';
   String deviceId = 'android-arm64-gateway';
   String password = '';
   ThemeMode themeMode = ThemeMode.system;
+  String activeProfileId = 'default';
+  List<AppServerProfile> profiles = const [];
 
   sqlite.Database? _db;
 
   Future<void> load() async {
     final db = await _openDb();
     _ensureSchema(db);
-    serverBaseUrl = _read(db, 'serverBaseUrl') ?? serverBaseUrl;
-    deviceId = _read(db, 'deviceId') ?? deviceId;
-    password = _read(db, 'password') ?? password;
-    themeMode = _parseThemeMode(_read(db, 'themeMode') ?? 'system');
+
+    themeMode = _parseThemeMode(_readSetting(db, 'themeMode') ?? 'system');
+    _bootstrapProfilesIfMissing(db);
+
+    activeProfileId = _readSetting(db, 'activeProfileId') ?? activeProfileId;
+    profiles = _readProfiles(db);
+
+    if (profiles.isEmpty) {
+      _bootstrapProfilesIfMissing(db);
+      profiles = _readProfiles(db);
+    }
+
+    final active = profiles.firstWhere(
+      (p) => p.id == activeProfileId,
+      orElse: () => profiles.first,
+    );
+
+    if (active.id != activeProfileId) {
+      activeProfileId = active.id;
+      _writeSetting(db, 'activeProfileId', activeProfileId);
+    }
+
+    serverBaseUrl = active.serverBaseUrl;
+    deviceId = active.deviceId;
+    password = active.password;
   }
 
   Future<void> save() async {
     final db = await _openDb();
     _ensureSchema(db);
-    _write(db, 'serverBaseUrl', serverBaseUrl);
-    _write(db, 'deviceId', deviceId);
-    _write(db, 'password', password);
-    _write(db, 'themeMode', themeMode.name);
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final current = profiles.firstWhere(
+      (p) => p.id == activeProfileId,
+      orElse: () => AppServerProfile(
+        id: activeProfileId,
+        name: 'Profile',
+        serverBaseUrl: serverBaseUrl,
+        deviceId: deviceId,
+        password: password,
+        updatedAt: now,
+      ),
+    );
+
+    await upsertProfile(
+      current.copyWith(
+        serverBaseUrl: serverBaseUrl,
+        deviceId: deviceId,
+        password: password,
+        updatedAt: now,
+      ),
+      setActive: true,
+    );
+
+    _writeSetting(db, 'themeMode', themeMode.name);
+    _writeSetting(db, 'activeProfileId', activeProfileId);
+  }
+
+  Future<void> saveThemeMode(ThemeMode mode) async {
+    themeMode = mode;
+    final db = await _openDb();
+    _ensureSchema(db);
+    _writeSetting(db, 'themeMode', mode.name);
+  }
+
+  Future<void> upsertProfile(AppServerProfile profile, {bool setActive = false}) async {
+    final db = await _openDb();
+    _ensureSchema(db);
+
+    final normalized = profile.copyWith(
+      name: profile.name.trim().isEmpty ? 'Profile' : profile.name.trim(),
+      serverBaseUrl: profile.serverBaseUrl.trim(),
+      deviceId: profile.deviceId.trim(),
+      password: profile.password.trim(),
+      updatedAt: profile.updatedAt <= 0 ? DateTime.now().millisecondsSinceEpoch : profile.updatedAt,
+    );
+
+    db.execute(
+      '''
+      INSERT INTO profiles(id, name, server_base_url, device_id, password, updated_at)
+      VALUES(?, ?, ?, ?, ?, ?)
+      ON CONFLICT(id) DO UPDATE SET
+        name = excluded.name,
+        server_base_url = excluded.server_base_url,
+        device_id = excluded.device_id,
+        password = excluded.password,
+        updated_at = excluded.updated_at;
+      ''',
+      [normalized.id, normalized.name, normalized.serverBaseUrl, normalized.deviceId, normalized.password, normalized.updatedAt],
+    );
+
+    profiles = _readProfiles(db);
+
+    if (setActive) {
+      activeProfileId = normalized.id;
+      _writeSetting(db, 'activeProfileId', activeProfileId);
+      serverBaseUrl = normalized.serverBaseUrl;
+      deviceId = normalized.deviceId;
+      password = normalized.password;
+    }
+  }
+
+  Future<void> activateProfile(String profileId) async {
+    final db = await _openDb();
+    _ensureSchema(db);
+    final next = profiles.firstWhere(
+      (p) => p.id == profileId,
+      orElse: () => profiles.first,
+    );
+    activeProfileId = next.id;
+    serverBaseUrl = next.serverBaseUrl;
+    deviceId = next.deviceId;
+    password = next.password;
+    _writeSetting(db, 'activeProfileId', activeProfileId);
   }
 
   void _ensureSchema(sqlite.Database db) {
@@ -154,19 +293,65 @@ class AppSettingsStore {
         value TEXT NOT NULL
       );
     ''');
+
+    db.execute('''
+      CREATE TABLE IF NOT EXISTS profiles(
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        server_base_url TEXT NOT NULL,
+        device_id TEXT NOT NULL,
+        password TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    ''');
+    db.execute('CREATE INDEX IF NOT EXISTS idx_profiles_updated_at ON profiles(updated_at DESC);');
   }
 
-  String? _read(sqlite.Database db, String key) {
+  void _bootstrapProfilesIfMissing(sqlite.Database db) {
+    final countRow = db.select('SELECT COUNT(1) AS c FROM profiles LIMIT 1;');
+    final count = (countRow.first['c'] as num?)?.toInt() ?? 0;
+    if (count > 0) return;
+
+    final legacyServer = _readSetting(db, 'serverBaseUrl') ?? serverBaseUrl;
+    final legacyDevice = _readSetting(db, 'deviceId') ?? deviceId;
+    final legacyPassword = _readSetting(db, 'password') ?? password;
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    db.execute(
+      'INSERT OR REPLACE INTO profiles(id, name, server_base_url, device_id, password, updated_at) VALUES(?, ?, ?, ?, ?, ?);',
+      ['default', '默认配置', legacyServer, legacyDevice, legacyPassword, now],
+    );
+    _writeSetting(db, 'activeProfileId', 'default');
+  }
+
+  List<AppServerProfile> _readProfiles(sqlite.Database db) {
+    final rows = db.select(
+      'SELECT id, name, server_base_url, device_id, password, updated_at FROM profiles ORDER BY updated_at DESC, id ASC;',
+    );
+
+    return rows
+        .map(
+          (r) => AppServerProfile(
+            id: r['id']?.toString() ?? '',
+            name: r['name']?.toString() ?? 'Profile',
+            serverBaseUrl: r['server_base_url']?.toString() ?? '',
+            deviceId: r['device_id']?.toString() ?? '',
+            password: r['password']?.toString() ?? '',
+            updatedAt: (r['updated_at'] as num?)?.toInt() ?? 0,
+          ),
+        )
+        .where((p) => p.id.isNotEmpty)
+        .toList();
+  }
+
+  String? _readSetting(sqlite.Database db, String key) {
     final rows = db.select('SELECT value FROM settings WHERE key = ?', [key]);
     if (rows.isEmpty) return null;
     return rows.first['value']?.toString();
   }
 
-  void _write(sqlite.Database db, String key, String value) {
-    db.execute(
-      'INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?);',
-      [key, value],
-    );
+  void _writeSetting(sqlite.Database db, String key, String value) {
+    db.execute('INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?);', [key, value]);
   }
 
   Future<sqlite.Database> _openDb() async {
@@ -240,16 +425,26 @@ class AppSettingsStore {
 }
 
 class LocalDatabase {
+  final String profileId;
   sqlite.Database? _db;
   bool _initialized = false;
 
+  LocalDatabase({required this.profileId});
+
   Future<void> init() async {
     if (_initialized) return;
-    final file = await _dbFile();
+    final file = await _dbFile(profileId);
     await file.parent.create(recursive: true);
     _db = sqlite.sqlite3.open(file.path);
     _ensureSchema(_db!);
     _initialized = true;
+  }
+
+  Future<void> close() async {
+    if (_db == null) return;
+    _db!.dispose();
+    _db = null;
+    _initialized = false;
   }
 
   Future<bool> upsertMessage(SmsItem item) async {
@@ -577,9 +772,12 @@ class LocalDatabase {
   }
 }
 
-Future<File> _dbFile() async {
+Future<File> _dbFile(String profileId) async {
   final base = await _appPrivateBaseDir();
-  return File(p.join(base, 'client_private.sqlite'));
+  final safeId = profileId.trim().isEmpty
+      ? 'default'
+      : profileId.replaceAll(RegExp(r'[^a-zA-Z0-9._-]'), '_');
+  return File(p.join(base, 'client_private_$safeId.sqlite'));
 }
 
 Future<File> _settingsFile() async {

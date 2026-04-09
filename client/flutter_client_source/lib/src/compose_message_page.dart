@@ -91,11 +91,12 @@ class _ComposeMessagePageState extends State<ComposeMessagePage> {
           )
           .toList(),
       child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         margin: const EdgeInsets.only(right: 4),
         decoration: BoxDecoration(
+          color: Theme.of(context).colorScheme.surfaceContainerHigh,
           border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
-          borderRadius: BorderRadius.circular(8),
+          borderRadius: BorderRadius.circular(999),
         ),
         child: Row(
           mainAxisSize: MainAxisSize.min,
@@ -109,9 +110,34 @@ class _ComposeMessagePageState extends State<ComposeMessagePage> {
     );
   }
 
+  InputDecoration _pillDecoration(String hintOrLabel, {bool isLabel = false, Widget? suffixIcon, BoxConstraints? suffixIconConstraints}) {
+    return InputDecoration(
+      labelText: isLabel ? hintOrLabel : null,
+      hintText: isLabel ? null : hintOrLabel,
+      filled: true,
+      fillColor: Theme.of(context).colorScheme.surfaceContainerHigh,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 14),
+      border: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(999),
+        borderSide: BorderSide.none,
+      ),
+      enabledBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(999),
+        borderSide: BorderSide.none,
+      ),
+      focusedBorder: OutlineInputBorder(
+        borderRadius: BorderRadius.circular(999),
+        borderSide: BorderSide(color: Theme.of(context).colorScheme.primary, width: 1.4),
+      ),
+      suffixIcon: suffixIcon,
+      suffixIconConstraints: suffixIconConstraints,
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      resizeToAvoidBottomInset: true,
       appBar: AppBar(title: Text(tr('新短信', 'New SMS'))),
       body: Column(
         children: [
@@ -120,11 +146,7 @@ class _ComposeMessagePageState extends State<ComposeMessagePage> {
             child: TextField(
               controller: _phoneCtrl,
               keyboardType: TextInputType.phone,
-              decoration: InputDecoration(
-                labelText: tr('号码', 'Phone'),
-                border: const OutlineInputBorder(),
-                prefixIcon: const Icon(Icons.person_outline),
-              ),
+              decoration: _pillDecoration(tr('号码', 'Phone'), isLabel: true),
             ),
           ),
           Expanded(
@@ -147,10 +169,10 @@ class _ComposeMessagePageState extends State<ComposeMessagePage> {
                       alignment: Alignment.centerRight,
                       child: Container(
                         constraints: const BoxConstraints(maxWidth: 420),
-                        padding: const EdgeInsets.all(10),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                         decoration: BoxDecoration(
                           color: Theme.of(context).colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(12),
+                          borderRadius: BorderRadius.circular(18),
                         ),
                         child: Text(_messageCtrl.text.trim()),
                       ),
@@ -159,29 +181,32 @@ class _ComposeMessagePageState extends State<ComposeMessagePage> {
               ),
             ),
           ),
-          Padding(
-            padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-            child: Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _messageCtrl,
-                    minLines: 1,
-                    maxLines: 4,
-                    decoration: InputDecoration(
-                      hintText: tr('输入消息...', 'Type a message...'),
-                      border: const OutlineInputBorder(),
-                      suffixIcon: _showSimSelection ? _buildSimSelector() : null,
-                      suffixIconConstraints: const BoxConstraints(minWidth: 68, maxWidth: 124),
+          SafeArea(
+            top: false,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+              child: Row(
+                children: [
+                  Expanded(
+                    child: TextField(
+                      controller: _messageCtrl,
+                      minLines: 1,
+                      maxLines: 4,
+                      decoration: _pillDecoration(
+                        tr('输入消息...', 'Type a message...'),
+                        suffixIcon: _showSimSelection ? _buildSimSelector() : null,
+                        suffixIconConstraints: const BoxConstraints(minWidth: 72, maxWidth: 140),
+                      ),
                     ),
                   ),
-                ),
-                const SizedBox(width: 8),
-                FloatingActionButton.small(
-                  onPressed: _submit,
-                  child: const Icon(Icons.send),
-                ),
-              ],
+                  const SizedBox(width: 8),
+                  FilledButton(
+                    onPressed: _submit,
+                    style: FilledButton.styleFrom(shape: const CircleBorder(), padding: const EdgeInsets.all(14)),
+                    child: const Icon(Icons.send),
+                  ),
+                ],
+              ),
             ),
           ),
         ],
@@ -189,3 +214,4 @@ class _ComposeMessagePageState extends State<ComposeMessagePage> {
     );
   }
 }
+

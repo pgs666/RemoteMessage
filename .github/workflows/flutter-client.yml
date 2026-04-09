@@ -30,7 +30,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector
+          flutter pub add path path_provider sqlite3 file_selector flutter_contacts
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -73,7 +73,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector
+          flutter pub add path path_provider sqlite3 file_selector flutter_contacts
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -121,7 +121,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector
+          flutter pub add path path_provider sqlite3 file_selector flutter_contacts
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -146,6 +146,9 @@ jobs:
           fi
           if ! grep -q "android.permission.ACCESS_NETWORK_STATE" "$manifest"; then
             sed -i '/<manifest[^>]*>/a\    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />' "$manifest"
+          fi
+          if ! grep -q "android.permission.READ_CONTACTS" "$manifest"; then
+            sed -i '/<manifest[^>]*>/a\    <uses-permission android:name="android.permission.READ_CONTACTS" />' "$manifest"
           fi
 
       - name: Prepare stable Android signing
@@ -260,7 +263,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector
+          flutter pub add path path_provider sqlite3 file_selector flutter_contacts
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow

@@ -8,6 +8,7 @@ class SettingsResult {
   final String deviceId;
   final String password;
   final ThemeMode themeMode;
+  final String activeProfileId;
   final bool clearLocalDatabase;
 
   const SettingsResult({
@@ -15,24 +16,36 @@ class SettingsResult {
     required this.deviceId,
     required this.password,
     required this.themeMode,
+    required this.activeProfileId,
     this.clearLocalDatabase = false,
   });
 }
 
 class SettingsPage extends StatefulWidget {
   final AppSettingsStore settings;
+  final List<DeviceSimProfile> simProfiles;
 
-  const SettingsPage({super.key, required this.settings});
+  const SettingsPage({
+    super.key,
+    required this.settings,
+    required this.simProfiles,
+  });
 
   @override
   State<SettingsPage> createState() => _SettingsPageState();
 }
 
 class _SettingsPageState extends State<SettingsPage> {
+  late final TextEditingController _profileNameCtrl;
   late final TextEditingController _serverCtrl;
   late final TextEditingController _deviceCtrl;
   late final TextEditingController _passwordCtrl;
   late ThemeMode _themeMode;
+
+  late List<AppServerProfile> _profiles;
+  late String _activeProfileId;
+  late final String _initialProfileId;
+
   String _certStatus = '';
   bool _certBusy = false;
 
@@ -42,19 +55,144 @@ class _SettingsPageState extends State<SettingsPage> {
   @override
   void initState() {
     super.initState();
-    _serverCtrl = TextEditingController(text: widget.settings.serverBaseUrl);
-    _deviceCtrl = TextEditingController(text: widget.settings.deviceId);
-    _passwordCtrl = TextEditingController(text: widget.settings.password);
+
+    _profiles = List<AppServerProfile>.from(widget.settings.profiles);
+    if (_profiles.isEmpty) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      _profiles = [
+        AppServerProfile(
+          id: 'default',
+          name: tr('默认配置', 'Default Profile'),
+          serverBaseUrl: widget.settings.serverBaseUrl,
+          deviceId: widget.settings.deviceId,
+          password: widget.settings.password,
+          updatedAt: now,
+        ),
+      ];
+    }
+
+    _activeProfileId = widget.settings.activeProfileId;
+    if (!_profiles.any((p) => p.id == _activeProfileId)) {
+      _activeProfileId = _profiles.first.id;
+    }
+    _initialProfileId = _activeProfileId;
+
+    _profileNameCtrl = TextEditingController();
+    _serverCtrl = TextEditingController();
+    _deviceCtrl = TextEditingController();
+    _passwordCtrl = TextEditingController();
     _themeMode = widget.settings.themeMode;
+
+    _loadProfileIntoForm(_activeProfileId);
     _reloadCertStatus();
   }
 
   @override
   void dispose() {
+    _profileNameCtrl.dispose();
     _serverCtrl.dispose();
     _deviceCtrl.dispose();
     _passwordCtrl.dispose();
     super.dispose();
+  }
+
+  AppServerProfile _profileById(String id) {
+    return _profiles.firstWhere((p) => p.id == id, orElse: () => _profiles.first);
+  }
+
+  void _loadProfileIntoForm(String profileId) {
+    final p = _profileById(profileId);
+    _profileNameCtrl.text = p.name;
+    _serverCtrl.text = p.serverBaseUrl;
+    _deviceCtrl.text = p.deviceId;
+    _passwordCtrl.text = p.password;
+  }
+
+  void _applyFormToActiveProfile() {
+    final idx = _profiles.indexWhere((p) => p.id == _activeProfileId);
+    if (idx < 0) return;
+    final old = _profiles[idx];
+    _profiles[idx] = old.copyWith(
+      name: _profileNameCtrl.text.trim().isEmpty ? tr('未命名配置', 'Unnamed Profile') : _profileNameCtrl.text.trim(),
+      serverBaseUrl: _serverCtrl.text.trim(),
+      deviceId: _deviceCtrl.text.trim(),
+      password: _passwordCtrl.text.trim(),
+      updatedAt: DateTime.now().millisecondsSinceEpoch,
+    );
+  }
+
+  Future<void> _switchProfile(String? profileId) async {
+    if (profileId == null || profileId == _activeProfileId) return;
+    setState(() {
+      _applyFormToActiveProfile();
+      _activeProfileId = profileId;
+      _loadProfileIntoForm(_activeProfileId);
+    });
+  }
+
+  Future<void> _addProfileDialog() async {
+    final nameCtrl = TextEditingController(text: tr('新配置', 'New Profile'));
+    final serverCtrl = TextEditingController(text: _serverCtrl.text.trim());
+    final deviceCtrl = TextEditingController(text: _deviceCtrl.text.trim());
+    final passwordCtrl = TextEditingController(text: _passwordCtrl.text.trim());
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(tr('添加配置', 'Add Profile')),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              TextField(
+                controller: nameCtrl,
+                decoration: InputDecoration(labelText: tr('配置名称', 'Profile Name')),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: serverCtrl,
+                decoration: InputDecoration(labelText: tr('服务器地址', 'Server Base URL')),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: deviceCtrl,
+                decoration: InputDecoration(labelText: tr('设备 ID', 'Device ID')),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: passwordCtrl,
+                obscureText: true,
+                decoration: InputDecoration(labelText: tr('密码', 'Password')),
+              ),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('取消', 'Cancel'))),
+          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('添加', 'Add'))),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final id = 'profile_$now';
+    final profile = AppServerProfile(
+      id: id,
+      name: nameCtrl.text.trim().isEmpty ? tr('新配置', 'New Profile') : nameCtrl.text.trim(),
+      serverBaseUrl: serverCtrl.text.trim(),
+      deviceId: deviceCtrl.text.trim(),
+      password: passwordCtrl.text.trim(),
+      updatedAt: now,
+    );
+
+    setState(() {
+      _applyFormToActiveProfile();
+      _profiles = [profile, ..._profiles];
+      _activeProfileId = id;
+      _loadProfileIntoForm(_activeProfileId);
+    });
   }
 
   Future<void> _reloadCertStatus() async {
@@ -101,19 +239,29 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _saveAndClose({bool clearLocalDatabase = false}) async {
-    widget.settings.serverBaseUrl = _serverCtrl.text.trim();
-    widget.settings.deviceId = _deviceCtrl.text.trim();
-    widget.settings.password = _passwordCtrl.text.trim();
+    _applyFormToActiveProfile();
+
+    for (final p in _profiles) {
+      await widget.settings.upsertProfile(p, setActive: false);
+    }
+    await widget.settings.activateProfile(_activeProfileId);
+
+    final active = _profileById(_activeProfileId);
+    widget.settings.serverBaseUrl = active.serverBaseUrl;
+    widget.settings.deviceId = active.deviceId;
+    widget.settings.password = active.password;
     widget.settings.themeMode = _themeMode;
     await widget.settings.save();
+
     if (!mounted) return;
     Navigator.pop(
       context,
       SettingsResult(
-        serverBaseUrl: widget.settings.serverBaseUrl,
-        deviceId: widget.settings.deviceId,
-        password: widget.settings.password,
+        serverBaseUrl: active.serverBaseUrl,
+        deviceId: active.deviceId,
+        password: active.password,
         themeMode: _themeMode,
+        activeProfileId: _activeProfileId,
         clearLocalDatabase: clearLocalDatabase,
       ),
     );
@@ -142,14 +290,118 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  String _simLabel(int slotIndex) => tr('卡${slotIndex + 1}', 'SIM ${slotIndex + 1}');
+
+  Widget _buildSimInfoCard() {
+    final sims = [...widget.simProfiles]..sort((a, b) => a.slotIndex.compareTo(b.slotIndex));
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(tr('网关号码信息', 'Gateway SIM Numbers'), style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            if (sims.isEmpty)
+              Text(tr('暂无 SIM 信息，请先返回首页刷新。', 'No SIM info yet. Please refresh from home page first.')),
+            for (final sim in sims)
+              Container(
+                margin: const EdgeInsets.only(bottom: 8),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                decoration: BoxDecoration(
+                  color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.sim_card, color: Theme.of(context).colorScheme.primary),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        '${_simLabel(sim.slotIndex)}${sim.displayName == null || sim.displayName!.trim().isEmpty ? '' : ' · ${sim.displayName!.trim()}'}',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Text(
+                      (sim.phoneNumber?.trim().isNotEmpty ?? false) ? sim.phoneNumber!.trim() : tr('未读取', 'Unknown'),
+                      style: Theme.of(context).textTheme.bodyMedium,
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
+    final profileSwitched = _activeProfileId != _initialProfileId;
+
     return Scaffold(
       appBar: AppBar(title: Text(tr('设置', 'Settings'))),
-      body: Padding(
+      body: SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Card(
+              child: Padding(
+                padding: const EdgeInsets.all(12),
+                child: Column(
+                  children: [
+                    DropdownButtonFormField<String>(
+                      value: _activeProfileId,
+                      decoration: InputDecoration(
+                        labelText: tr('当前配置', 'Active Profile'),
+                        border: const OutlineInputBorder(),
+                      ),
+                      items: _profiles
+                          .map(
+                            (p) => DropdownMenuItem<String>(
+                              value: p.id,
+                              child: Text(p.name, overflow: TextOverflow.ellipsis),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: _switchProfile,
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            onPressed: _addProfileDialog,
+                            icon: const Icon(Icons.add),
+                            label: Text(tr('添加配置', 'Add Profile')),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (profileSwitched)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8),
+                        child: Align(
+                          alignment: Alignment.centerLeft,
+                          child: Text(
+                            tr('保存后将切换配置并清空当前列表，加载目标配置短信。', 'Saving will switch profile, clear current list, and load the selected profile messages.'),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: _profileNameCtrl,
+              decoration: InputDecoration(labelText: tr('配置名称', 'Profile Name'), border: const OutlineInputBorder()),
+            ),
+            const SizedBox(height: 12),
             TextField(
               controller: _serverCtrl,
               decoration: InputDecoration(labelText: tr('服务器地址', 'Server Base URL'), border: const OutlineInputBorder()),
@@ -165,6 +417,8 @@ class _SettingsPageState extends State<SettingsPage> {
               obscureText: true,
               decoration: InputDecoration(labelText: tr('密码', 'Password'), border: const OutlineInputBorder()),
             ),
+            const SizedBox(height: 12),
+            _buildSimInfoCard(),
             const SizedBox(height: 12),
             DropdownButtonFormField<ThemeMode>(
               value: _themeMode,
@@ -191,15 +445,15 @@ class _SettingsPageState extends State<SettingsPage> {
               label: Text(tr('清空本地数据库', 'Clear local database')),
             ),
             const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerLeft,
-              child: Text(_certStatus, style: Theme.of(context).textTheme.bodyMedium),
-            ),
-            const Spacer(),
-            FilledButton.icon(
-              onPressed: _saveAndClose,
-              icon: const Icon(Icons.save),
-              label: Text(tr('保存', 'Save')),
+            Text(_certStatus, style: Theme.of(context).textTheme.bodyMedium),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: _saveAndClose,
+                icon: const Icon(Icons.save),
+                label: Text(tr('保存', 'Save')),
+              ),
             ),
           ],
         ),
@@ -207,3 +461,4 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 }
+
