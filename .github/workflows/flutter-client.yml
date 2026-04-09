@@ -158,9 +158,10 @@ jobs:
           if [ -f client/flutter_client_build/android/app/build.gradle.kts ]; then
             cat >> client/flutter_client_build/android/app/build.gradle.kts <<'EOF'
 
-          val releaseKeystoreProperties = java.util.Properties().apply {
-              val file = rootProject.file("key.properties")
-              file.inputStream().use { load(it) }
+          val releaseKeystoreProperties = Properties()
+          val releaseKeystoreFile = rootProject.file("key.properties")
+          releaseKeystoreFile.inputStream().use { stream ->
+              releaseKeystoreProperties.load(stream)
           }
 
           android {
