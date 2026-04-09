@@ -153,7 +153,18 @@ object GatewayRuntime {
                 val ackToken = json.optString("ackToken", "").trim()
                     .takeIf { it.isNotBlank() && !it.equals("null", ignoreCase = true) }
                 val encrypted = json.getString("encryptedPayloadBase64")
-                val plain = decryptWithPrivateKey(privatePem, encrypted)
+                val plain = runCatching {
+                    decryptWithPrivateKey(privatePem, encrypted)
+                }.getOrElse { decryptError ->
+                    GatewayDebugLog.add(context, "Outbound decrypt failed: ${decryptError.debugSummary()}")
+                    runCatching {
+                        registerGatewayKeySync(context, cfg)
+                        GatewayDebugLog.add(context, "Gateway key re-register triggered after decrypt failure")
+                    }.onFailure {
+                        GatewayDebugLog.add(context, "Gateway key re-register failed: ${it.debugSummary()}")
+                    }
+                    throw decryptError
+                }
                 val payload = JSONObject(plain)
                 val phone = payload.getString("targetPhone")
                 val text = payload.getString("content")
@@ -647,6 +658,23 @@ object GatewayRuntime {
         }
     }
 
+    private fun registerGatewayKeySync(context: Context, cfg: GatewayConfig) {
+        val (pubPem, _) = getOrCreateKeyPairPem(context)
+        val bodyJson = JSONObject()
+            .put("deviceId", cfg.deviceId)
+            .put("publicKeyPem", pubPem)
+        val req = Request.Builder()
+            .url("${cfg.serverBaseUrl}/api/gateway/register")
+            .post(bodyJson.toString().toRequestBody("application/json".toMediaType()))
+            .build()
+        httpClient(context, cfg).newCall(req).execute().use {
+            if (!it.isSuccessful) {
+                val body = it.body?.string()?.takeIf { text -> text.isNotBlank() } ?: "no body"
+                error("register failed: ${it.code} $body")
+            }
+        }
+    }
+
     private fun httpClient(context: Context, cfg: GatewayConfig): OkHttpClient {
         val certStamp = GatewayCertificateStore.certFile(context).let { file ->
             if (file.exists()) file.lastModified() else -1L
@@ -713,7 +741,24 @@ object GatewayRuntime {
         val pub = pref.getString(KEY_PUBLIC, null)
         val pri = pref.getString(KEY_PRIVATE, null)
         if (!pub.isNullOrBlank() && !pri.isNullOrBlank()) {
-            return pub to pri
+            if (pri.startsWith("android-keystore:")) {
+                val alias = pri.removePrefix("android-keystore:")
+                val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+                val cert = keyStore.getCertificate(alias)
+                if (cert != null) {
+                    val actualPubPem = toPem("PUBLIC KEY", cert.publicKey.encoded)
+                    if (actualPubPem != pub) {
+                        pref.edit().putString(KEY_PUBLIC, actualPubPem).putString(KEY_PRIVATE, pri).apply()
+                        GatewayDebugLog.add(context, "Gateway key cache refreshed from AndroidKeyStore certificate")
+                        return actualPubPem to pri
+                    }
+                    return pub to pri
+                }
+
+                pref.edit().remove(KEY_PUBLIC).remove(KEY_PRIVATE).apply()
+            } else {
+                return pub to pri
+            }
         }
 
         val keyStore = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
