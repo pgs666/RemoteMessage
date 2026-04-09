@@ -531,7 +531,8 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
 
     _contactsLoading = true;
     try {
-      final granted = await FlutterContacts.requestPermission(readonly: true);
+      final status = await FlutterContacts.permissions.request(PermissionType.read);
+      final granted = status == PermissionStatus.granted || status == PermissionStatus.limited;
       if (!granted) {
         if (!mounted) return;
         setState(() {
@@ -541,7 +542,7 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
         return;
       }
 
-      final contacts = await FlutterContacts.getContacts(withProperties: true);
+      final contacts = await FlutterContacts.getAll(properties: {ContactProperty.phone});
       final map = <String, String>{};
       for (final c in contacts) {
         final name = c.displayName.trim();
