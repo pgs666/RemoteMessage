@@ -8,10 +8,19 @@ using System.Linq;
 using Microsoft.Data.Sqlite;
 
 var jsonOptions = new JsonSerializerOptions(JsonSerializerDefaults.Web);
+var serverLogPath = Path.Combine(RuntimeLayout.RuntimeDirectory, "server.log");
 
 var serverSettings = new ServerRuntimeSettings();
 var httpsSettings = new HttpsCertificateSettings();
 var builder = WebApplication.CreateBuilder(args);
+builder.Logging.ClearProviders();
+builder.Logging.SetMinimumLevel(LogLevel.Information);
+builder.Logging.AddSimpleConsole(options =>
+{
+    options.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
+    options.SingleLine = true;
+});
+builder.Logging.AddProvider(new FileLoggerProvider(serverLogPath));
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 256 * 1024;
@@ -40,6 +49,7 @@ app.Logger.LogInformation(
 app.Logger.LogInformation("Loaded config {ServerConfPath}; HTTPS port={HttpsPort}", serverSettings.ServerConfigFilePath, serverSettings.HttpsPort);
 app.Logger.LogInformation("Runtime files are created beside the executable: server.db, server.conf, server-cert.cer, server-cert.pfx");
 app.Logger.LogInformation("SQLite database path: {DatabaseFilePath}", startupRepo.DatabaseFilePath);
+app.Logger.LogInformation("Server log path: {ServerLogPath}", serverLogPath);
 if (serverSettings.Password.Length < 16)
 {
     app.Logger.LogWarning("Configured password is shorter than 16 characters. Use a long random password before any internet exposure.");
@@ -1232,4 +1242,100 @@ public sealed class PendingOutbound
 
     [JsonPropertyName("encryptedPayloadBase64")]
     public string EncryptedPayloadBase64 { get; set; } = string.Empty;
+}
+
+public sealed class FileLoggerProvider : ILoggerProvider
+{
+    private readonly string _logFilePath;
+    private readonly object _writeLock = new();
+
+    public FileLoggerProvider(string logFilePath)
+    {
+        _logFilePath = logFilePath;
+        var directory = Path.GetDirectoryName(_logFilePath);
+        if (!string.IsNullOrWhiteSpace(directory))
+        {
+            Directory.CreateDirectory(directory);
+        }
+    }
+
+    public ILogger CreateLogger(string categoryName) => new FileLogger(_logFilePath, categoryName, _writeLock);
+
+    public void Dispose()
+    {
+    }
+}
+
+public sealed class FileLogger : ILogger
+{
+    private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
+    private readonly string _logFilePath;
+    private readonly string _categoryName;
+    private readonly object _writeLock;
+
+    public FileLogger(string logFilePath, string categoryName, object writeLock)
+    {
+        _logFilePath = logFilePath;
+        _categoryName = categoryName;
+        _writeLock = writeLock;
+    }
+
+    public IDisposable BeginScope<TState>(TState state) where TState : notnull => NoopScope.Instance;
+
+    public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
+
+    public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
+    {
+        if (!IsEnabled(logLevel))
+        {
+            return;
+        }
+
+        var message = formatter(state, exception);
+        if (string.IsNullOrWhiteSpace(message) && exception is null)
+        {
+            return;
+        }
+
+        var line = $"[{DateTimeOffset.Now:yyyy-MM-dd HH:mm:ss.fff zzz}] {logLevel,-11} {_categoryName}: {Sanitize(message)}";
+        if (exception is not null)
+        {
+            line += $" | {Sanitize(exception.ToString())}";
+        }
+
+        try
+        {
+            lock (_writeLock)
+            {
+                File.AppendAllText(_logFilePath, line + Environment.NewLine, Utf8NoBom);
+            }
+        }
+        catch
+        {
+            // Logging must not crash the server process.
+        }
+    }
+
+    private static string Sanitize(string? value)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return string.Empty;
+        }
+
+        return value.Replace('\r', ' ').Replace('\n', ' ');
+    }
+}
+
+public sealed class NoopScope : IDisposable
+{
+    public static readonly NoopScope Instance = new();
+
+    private NoopScope()
+    {
+    }
+
+    public void Dispose()
+    {
+    }
 }
