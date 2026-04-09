@@ -539,8 +539,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     final client = await widget.settings.createHttpClient(url, isZh: _isZh);
     try {
       final req = await client.getUrl(url);
-      if ((password ?? '').trim().isNotEmpty) {
-        req.headers.set('X-Password', password!.trim());
+      final secret = (password ?? '').trim();
+      if (secret.isNotEmpty) {
+        req.headers.set('X-Client-Token', secret);
+        req.headers.set('X-Password', secret);
       }
       final resp = await req.close();
       final body = await utf8.decodeStream(resp);
@@ -558,8 +560,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     try {
       final req = await client.postUrl(url);
       req.headers.contentType = ContentType.json;
-      if ((password ?? '').trim().isNotEmpty) {
-        req.headers.set('X-Password', password!.trim());
+      final secret = (password ?? '').trim();
+      if (secret.isNotEmpty) {
+        req.headers.set('X-Client-Token', secret);
+        req.headers.set('X-Password', secret);
       }
       req.add(utf8.encode(jsonEncode(data)));
       final resp = await req.close();

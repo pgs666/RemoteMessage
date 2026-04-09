@@ -1050,7 +1050,7 @@ object GatewayRuntime {
             GatewayDebugLog.add(context, "Skip outbound status report: missing gateway config")
             return
         }
-        RuntimeConfig.password = configPref.getString("password", configPref.getString("api_key", ""))?.ifBlank { null }
+        RuntimeConfig.password = GatewaySecretStore.loadPassword(context)
         reportOutboundStatusAsync(
             context = context,
             cfg = GatewayConfig(serverBase, deviceId),
@@ -1165,6 +1165,7 @@ object GatewayRuntime {
                     val req = original.newBuilder()
                     val password = RuntimeConfig.password?.trim()
                     if (!password.isNullOrEmpty()) {
+                        req.header("X-Gateway-Token", password)
                         req.header("X-Password", password)
                     }
                     chain.proceed(req.build())

@@ -15,7 +15,7 @@ builder.Logging.AddSimpleConsole(options =>
     options.TimestampFormat = "yyyy-MM-dd HH:mm:ss.fff ";
     options.SingleLine = true;
 });
-builder.Logging.AddProvider(new FileLoggerProvider(serverLogPath));
+builder.Logging.AddProvider(new FileLoggerProvider(serverLogPath, serverSettings.LogMaxBytes, serverSettings.LogRetentionDays));
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 256 * 1024;
@@ -47,6 +47,18 @@ app.Logger.LogInformation("Runtime files are created beside the executable: serv
 app.Logger.LogInformation("SQLite database path: {DatabaseFilePath}", startupRepo.DatabaseFilePath);
 app.Logger.LogInformation("Server log path: {ServerLogPath}", serverLogPath);
 app.Logger.LogInformation("Server crypto private key path: {ServerCryptoKeyPath}", startupCrypto.PrivateKeyFilePath);
+app.Logger.LogInformation(
+    "Auth enabled: gateway/client/admin segmented tokens with legacy X-Password fallback for compatibility."
+);
+app.Logger.LogInformation(
+    "Maintenance policy: every {IntervalMinutes} min; log retention {LogDays} days / {LogMaxMb} MB; api_logs {ApiLogDays} days; messages {MessageDays} days (0=keep); db max {DbMaxMb} MB.",
+    serverSettings.MaintenanceIntervalMinutes,
+    serverSettings.LogRetentionDays,
+    serverSettings.LogMaxBytes / (1024 * 1024),
+    serverSettings.ApiLogRetentionDays,
+    serverSettings.MessageRetentionDays,
+    serverSettings.DatabaseMaxBytes / (1024 * 1024)
+);
 if (serverSettings.Password.Length < 16)
 {
     app.Logger.LogWarning("Configured password is shorter than 16 characters. Use a long random password before any internet exposure.");
@@ -65,11 +77,10 @@ app.Use(async (context, next) =>
 
     if (requiresAuth)
     {
-        var password = context.Request.Headers["X-Password"].ToString();
-        if (!ApiSupport.PasswordMatches(password, sec.Password))
+        if (!IsRequestAuthorized(context.Request, sec))
         {
             context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await context.Response.WriteAsJsonAsync(new { error = "invalid password" });
+            await context.Response.WriteAsJsonAsync(new { error = "invalid credentials" });
             repo.InsertApiLog(context.Request.Method, path, 401, context.Connection.RemoteIpAddress?.ToString() ?? "unknown", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - begin);
             return;
         }
@@ -358,4 +369,95 @@ app.MapPost("/api/admin/clear-server-data", (ClearServerDataRequest req, SqliteR
     return Results.Ok(new { ok = true, result });
 });
 
+var maintenanceCancellation = new CancellationTokenSource();
+app.Lifetime.ApplicationStopping.Register(() => maintenanceCancellation.Cancel());
+_ = Task.Run(() => RunMaintenanceLoopAsync(app, serverSettings, maintenanceCancellation.Token));
+
 app.Run();
+
+static bool IsRequestAuthorized(HttpRequest request, ServerRuntimeSettings settings)
+{
+    static bool HeaderMatches(Microsoft.AspNetCore.Http.IHeaderDictionary headers, string headerName, string expected)
+    {
+        var provided = headers[headerName].ToString();
+        return ApiSupport.PasswordMatches(provided, expected);
+    }
+
+    static bool LegacyPasswordMatches(Microsoft.AspNetCore.Http.IHeaderDictionary headers, ServerRuntimeSettings settings)
+    {
+        return HeaderMatches(headers, "X-Password", settings.Password);
+    }
+
+    var path = request.Path.Value ?? string.Empty;
+    var headers = request.Headers;
+
+    if (path.StartsWith("/api/gateway/", StringComparison.OrdinalIgnoreCase))
+    {
+        return HeaderMatches(headers, "X-Gateway-Token", settings.GatewayToken) || LegacyPasswordMatches(headers, settings);
+    }
+
+    if (path.StartsWith("/api/client/", StringComparison.OrdinalIgnoreCase))
+    {
+        return HeaderMatches(headers, "X-Client-Token", settings.ClientToken) || LegacyPasswordMatches(headers, settings);
+    }
+
+    if (path.StartsWith("/api/admin/", StringComparison.OrdinalIgnoreCase))
+    {
+        return HeaderMatches(headers, "X-Admin-Token", settings.AdminToken) || LegacyPasswordMatches(headers, settings);
+    }
+
+    if (path.StartsWith("/api/crypto/", StringComparison.OrdinalIgnoreCase))
+    {
+        return HeaderMatches(headers, "X-Gateway-Token", settings.GatewayToken)
+            || HeaderMatches(headers, "X-Client-Token", settings.ClientToken)
+            || HeaderMatches(headers, "X-Admin-Token", settings.AdminToken)
+            || LegacyPasswordMatches(headers, settings);
+    }
+
+    return LegacyPasswordMatches(headers, settings);
+}
+
+static async Task RunMaintenanceLoopAsync(WebApplication app, ServerRuntimeSettings settings, CancellationToken cancellationToken)
+{
+    var interval = TimeSpan.FromMinutes(Math.Clamp(settings.MaintenanceIntervalMinutes, 5, 1440));
+
+    void RunOnce()
+    {
+        try
+        {
+            using var scope = app.Services.CreateScope();
+            var repo = scope.ServiceProvider.GetRequiredService<SqliteRepository>();
+            var result = repo.RunMaintenance(settings);
+            if (result.HasChanges)
+            {
+                app.Logger.LogInformation(
+                    "Maintenance cleaned: apiLogs={ApiLogsDeleted}, messages={MessagesDeleted}, outbox={OutboxDeleted}, orphanPins={OrphanPinsDeleted}, dbVacuumed={DbVacuumed}, dbBytes={DatabaseBytes}",
+                    result.ApiLogsDeleted,
+                    result.MessagesDeleted,
+                    result.OutboxDeleted,
+                    result.OrphanPinsDeleted,
+                    result.DatabaseVacuumed,
+                    result.DatabaseBytes
+                );
+            }
+        }
+        catch (Exception ex)
+        {
+            app.Logger.LogWarning(ex, "Maintenance loop failed");
+        }
+    }
+
+    RunOnce();
+
+    using var timer = new PeriodicTimer(interval);
+    try
+    {
+        while (await timer.WaitForNextTickAsync(cancellationToken))
+        {
+            RunOnce();
+        }
+    }
+    catch (OperationCanceledException)
+    {
+    }
+}

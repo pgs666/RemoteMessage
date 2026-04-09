@@ -20,7 +20,7 @@ class GatewaySyncWorker(
         val prefs = applicationContext.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
         val server = prefs.getString("server_base", "") ?: ""
         val deviceId = prefs.getString("device_id", "") ?: ""
-        RuntimeConfig.password = prefs.getString("password", prefs.getString("api_key", ""))?.ifBlank { null }
+        RuntimeConfig.password = GatewaySecretStore.loadPassword(applicationContext)
         if (server.isBlank() || deviceId.isBlank()) return Result.success()
 
         val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId)

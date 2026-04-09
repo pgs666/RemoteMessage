@@ -76,7 +76,7 @@ class GatewayForegroundService : Service() {
             val prefs = getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
             val server = prefs.getString("server_base", "")?.trim().orEmpty()
             val deviceId = prefs.getString("device_id", "")?.trim().orEmpty()
-            RuntimeConfig.password = prefs.getString("password", prefs.getString("api_key", ""))?.ifBlank { null }
+            RuntimeConfig.password = GatewaySecretStore.loadPassword(this)
 
             if (server.isBlank() || deviceId.isBlank()) {
                 updateNotification(getString(R.string.fg_sync_waiting_config))

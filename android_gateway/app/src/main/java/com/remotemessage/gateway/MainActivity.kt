@@ -110,11 +110,11 @@ class MainActivity : ComponentActivity() {
 
         editServer.setText(pref.getString("server_base", "https://10.0.2.2:5001") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
-        editApiKey.setText(pref.getString("password", pref.getString("api_key", "")) ?: "")
+        editApiKey.setText(GatewaySecretStore.loadPassword(this) ?: "")
         editWebUiPort.setText(pref.getString("webui_port", "8088") ?: "8088")
         textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
 
-        RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
+        RuntimeConfig.password = GatewaySecretStore.loadPassword(this)
 
         GatewaySyncWorker.schedule(this)
         startWebUiServer(editServer, editDeviceId, editApiKey, editWebUiPort, textStatus)
@@ -146,9 +146,9 @@ class MainActivity : ComponentActivity() {
                 .putString("server_base", serverText)
                 .putString("device_id", deviceIdText)
                 .remove("sim_sub_id")
-                .putString("password", passwordText)
                 .putString("webui_port", port.toString())
                 .apply()
+            GatewaySecretStore.savePassword(this, passwordText)
             RuntimeConfig.password = passwordText
             val cfg = GatewayConfig(
                 serverBaseUrl = serverText,

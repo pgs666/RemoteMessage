@@ -298,8 +298,10 @@ class _SettingsPageState extends State<SettingsPage> {
     final client = await widget.settings.createHttpClient(url, isZh: _isZh);
     try {
       final req = await client.getUrl(url);
-      if ((password ?? '').trim().isNotEmpty) {
-        req.headers.set('X-Password', password!.trim());
+      final secret = (password ?? '').trim();
+      if (secret.isNotEmpty) {
+        req.headers.set('X-Client-Token', secret);
+        req.headers.set('X-Password', secret);
       }
       final resp = await req.close();
       final body = await utf8.decodeStream(resp);

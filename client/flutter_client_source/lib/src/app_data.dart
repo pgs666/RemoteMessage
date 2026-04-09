@@ -3,6 +3,7 @@ import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqlite3/sqlite3.dart' as sqlite;
@@ -188,6 +189,9 @@ class AppSettingsStore {
   List<AppServerProfile> profiles = const [];
 
   sqlite.Database? _db;
+  final FlutterSecureStorage _secureStorage = const FlutterSecureStorage();
+
+  static const String _profilePasswordSecureKeyPrefix = 'profile_password_v1_';
 
   static bool isLikelyTlsCertificateIssue(Object error) {
     final text = error.toString().toLowerCase();
@@ -220,11 +224,11 @@ class AppSettingsStore {
     _bootstrapProfilesIfMissing(db);
 
     activeProfileId = _readSetting(db, 'activeProfileId') ?? activeProfileId;
-    profiles = _readProfiles(db);
+    profiles = await _readProfiles(db);
 
     if (profiles.isEmpty) {
       _bootstrapProfilesIfMissing(db);
-      profiles = _readProfiles(db);
+      profiles = await _readProfiles(db);
     }
 
     final active = profiles.firstWhere(
@@ -293,6 +297,7 @@ class AppSettingsStore {
       updatedAt: profile.updatedAt <= 0 ? DateTime.now().millisecondsSinceEpoch : profile.updatedAt,
     );
 
+    final persistedPassword = await _persistProfilePassword(normalized.id, normalized.password) ? '' : normalized.password;
     db.execute(
       '''
       INSERT INTO profiles(id, name, server_base_url, device_id, password, updated_at)
@@ -304,10 +309,10 @@ class AppSettingsStore {
         password = excluded.password,
         updated_at = excluded.updated_at;
       ''',
-      [normalized.id, normalized.name, normalized.serverBaseUrl, normalized.deviceId, normalized.password, normalized.updatedAt],
+      [normalized.id, normalized.name, normalized.serverBaseUrl, normalized.deviceId, persistedPassword, normalized.updatedAt],
     );
 
-    profiles = _readProfiles(db);
+    profiles = await _readProfiles(db);
 
     if (setActive) {
       activeProfileId = normalized.id;
@@ -368,14 +373,15 @@ class AppSettingsStore {
       ['default', '默认配置', legacyServer, legacyDevice, legacyPassword, now],
     );
     _writeSetting(db, 'activeProfileId', 'default');
+    _writeSetting(db, 'password', '');
   }
 
-  List<AppServerProfile> _readProfiles(sqlite.Database db) {
+  Future<List<AppServerProfile>> _readProfiles(sqlite.Database db) async {
     final rows = db.select(
       'SELECT id, name, server_base_url, device_id, password, updated_at FROM profiles ORDER BY updated_at DESC, id ASC;',
     );
 
-    return rows
+    final legacyProfiles = rows
         .map(
           (r) => AppServerProfile(
             id: r['id']?.toString() ?? '',
@@ -388,6 +394,69 @@ class AppSettingsStore {
         )
         .where((p) => p.id.isNotEmpty)
         .toList();
+
+    return _resolveProfilePasswords(db, legacyProfiles);
+  }
+
+  Future<List<AppServerProfile>> _resolveProfilePasswords(sqlite.Database db, List<AppServerProfile> source) async {
+    if (source.isEmpty) {
+      return const [];
+    }
+
+    final result = <AppServerProfile>[];
+    final legacyIdsToClear = <String>{};
+
+    for (final profile in source) {
+      final securePassword = await _readProfilePassword(profile.id);
+      if (securePassword != null && securePassword.isNotEmpty) {
+        if (profile.password.trim().isNotEmpty) {
+          legacyIdsToClear.add(profile.id);
+        }
+        result.add(profile.copyWith(password: securePassword));
+        continue;
+      }
+
+      final legacyPassword = profile.password.trim();
+      if (legacyPassword.isNotEmpty) {
+        final persisted = await _persistProfilePassword(profile.id, legacyPassword);
+        if (persisted) {
+          legacyIdsToClear.add(profile.id);
+        }
+      }
+      result.add(profile.copyWith(password: legacyPassword));
+    }
+
+    if (legacyIdsToClear.isNotEmpty) {
+      for (final id in legacyIdsToClear) {
+        db.execute('UPDATE profiles SET password = ? WHERE id = ?;', ['', id]);
+      }
+    }
+
+    return result;
+  }
+
+  String _profilePasswordSecureKey(String profileId) => '$_profilePasswordSecureKeyPrefix$profileId';
+
+  Future<String?> _readProfilePassword(String profileId) async {
+    try {
+      return await _secureStorage.read(key: _profilePasswordSecureKey(profileId));
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<bool> _persistProfilePassword(String profileId, String passwordText) async {
+    try {
+      final normalized = passwordText.trim();
+      if (normalized.isEmpty) {
+        await _secureStorage.delete(key: _profilePasswordSecureKey(profileId));
+      } else {
+        await _secureStorage.write(key: _profilePasswordSecureKey(profileId), value: normalized);
+      }
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   String? _readSetting(sqlite.Database db, String key) {

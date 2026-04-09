@@ -4,6 +4,7 @@ public sealed class SqliteRepository
 {
     private const long OutboxLeaseTimeoutMs = 60_000;
     private const int CurrentSchemaVersion = 3;
+    private const int MaintenanceDeleteBatchSize = 2_000;
     private readonly string _connectionString;
     public string DatabaseFilePath { get; }
 
@@ -510,6 +511,55 @@ VALUES(
         );
     }
 
+    public DatabaseMaintenanceResult RunMaintenance(ServerRuntimeSettings settings)
+    {
+        var apiLogsDeleted = 0;
+        var messagesDeleted = 0;
+        var outboxDeleted = 0;
+        var orphanPinsDeleted = 0;
+        var vacuumed = false;
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+
+        using var conn = Open();
+        using (var tx = conn.BeginTransaction())
+        {
+            if (settings.ApiLogRetentionDays > 0)
+            {
+                var cutoff = now - TimeSpan.FromDays(settings.ApiLogRetentionDays).TotalMilliseconds;
+                apiLogsDeleted += DeleteByTimestamp(conn, tx, "api_logs", "created_at", (long)cutoff);
+            }
+
+            if (settings.MessageRetentionDays > 0)
+            {
+                var cutoff = now - TimeSpan.FromDays(settings.MessageRetentionDays).TotalMilliseconds;
+                messagesDeleted += DeleteMessagesOlderThan(conn, tx, (long)cutoff);
+            }
+
+            orphanPinsDeleted += DeleteOrphanPinnedConversations(conn, tx);
+            tx.Commit();
+        }
+
+        var dbBytesBeforeTrim = GetDatabaseBytes(conn);
+        if (dbBytesBeforeTrim > settings.DatabaseMaxBytes)
+        {
+            var trim = TrimDatabaseBySize(conn, settings.DatabaseMaxBytes);
+            apiLogsDeleted += trim.ApiLogsDeleted;
+            messagesDeleted += trim.MessagesDeleted;
+            outboxDeleted += trim.OutboxDeleted;
+            orphanPinsDeleted += trim.OrphanPinsDeleted;
+            vacuumed = trim.DatabaseVacuumed;
+        }
+
+        return new DatabaseMaintenanceResult(
+            ApiLogsDeleted: apiLogsDeleted,
+            MessagesDeleted: messagesDeleted,
+            OutboxDeleted: outboxDeleted,
+            OrphanPinsDeleted: orphanPinsDeleted,
+            DatabaseVacuumed: vacuumed,
+            DatabaseBytes: GetDatabaseBytes(conn)
+        );
+    }
+
     private SqliteConnection Open()
     {
         var conn = OpenRaw();
@@ -713,4 +763,176 @@ CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
             _ => null
         };
     }
+
+    private int DeleteByTimestamp(SqliteConnection conn, SqliteTransaction tx, string tableName, string timestampColumn, long cutoff)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = $"DELETE FROM {tableName} WHERE {timestampColumn} < $cutoff;";
+        cmd.Parameters.AddWithValue("$cutoff", cutoff);
+        return cmd.ExecuteNonQuery();
+    }
+
+    private int DeleteMessagesOlderThan(SqliteConnection conn, SqliteTransaction tx, long cutoff)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = @"
+DELETE FROM messages
+WHERE COALESCE(updated_at, timestamp) < $cutoff;";
+        cmd.Parameters.AddWithValue("$cutoff", cutoff);
+        return cmd.ExecuteNonQuery();
+    }
+
+    private int DeleteOrphanPinnedConversations(SqliteConnection conn, SqliteTransaction tx)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = @"
+DELETE FROM pinned_conversations
+WHERE phone NOT IN (SELECT DISTINCT phone FROM messages);";
+        return cmd.ExecuteNonQuery();
+    }
+
+    private (int ApiLogsDeleted, int MessagesDeleted, int OutboxDeleted, int OrphanPinsDeleted, bool DatabaseVacuumed) TrimDatabaseBySize(SqliteConnection conn, long maxBytes)
+    {
+        var apiLogsDeleted = 0;
+        var messagesDeleted = 0;
+        var outboxDeleted = 0;
+        var orphanPinsDeleted = 0;
+
+        var currentBytes = GetDatabaseBytes(conn);
+        while (currentBytes > maxBytes)
+        {
+            var deleted = DeleteOldestApiLogs(conn, MaintenanceDeleteBatchSize);
+            apiLogsDeleted += deleted;
+            if (deleted <= 0)
+            {
+                break;
+            }
+
+            currentBytes = GetDatabaseBytes(conn);
+        }
+
+        while (currentBytes > maxBytes)
+        {
+            var deleted = DeleteOldestMessages(conn, MaintenanceDeleteBatchSize);
+            messagesDeleted += deleted;
+            if (deleted <= 0)
+            {
+                break;
+            }
+
+            orphanPinsDeleted += DeleteOrphanPinnedConversations(conn);
+            currentBytes = GetDatabaseBytes(conn);
+        }
+
+        if (apiLogsDeleted > 0 || messagesDeleted > 0 || orphanPinsDeleted > 0)
+        {
+            Vacuum(conn);
+            return (
+                ApiLogsDeleted: apiLogsDeleted,
+                MessagesDeleted: messagesDeleted,
+                OutboxDeleted: outboxDeleted,
+                OrphanPinsDeleted: orphanPinsDeleted,
+                DatabaseVacuumed: true
+            );
+        }
+
+        return (
+            ApiLogsDeleted: apiLogsDeleted,
+            MessagesDeleted: messagesDeleted,
+            OutboxDeleted: outboxDeleted,
+            OrphanPinsDeleted: orphanPinsDeleted,
+            DatabaseVacuumed: false
+        );
+    }
+
+    private int DeleteOldestApiLogs(SqliteConnection conn, int batchSize)
+    {
+        using var tx = conn.BeginTransaction();
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = @"
+DELETE FROM api_logs
+WHERE id IN (
+    SELECT id
+    FROM api_logs
+    ORDER BY created_at ASC, id ASC
+    LIMIT $limit
+);";
+        cmd.Parameters.AddWithValue("$limit", Math.Max(1, batchSize));
+        var deleted = cmd.ExecuteNonQuery();
+        tx.Commit();
+        return deleted;
+    }
+
+    private int DeleteOldestMessages(SqliteConnection conn, int batchSize)
+    {
+        using var tx = conn.BeginTransaction();
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = @"
+DELETE FROM messages
+WHERE id IN (
+    SELECT id
+    FROM messages
+    ORDER BY COALESCE(updated_at, timestamp) ASC, timestamp ASC, id ASC
+    LIMIT $limit
+);";
+        cmd.Parameters.AddWithValue("$limit", Math.Max(1, batchSize));
+        var deleted = cmd.ExecuteNonQuery();
+        tx.Commit();
+        return deleted;
+    }
+
+    private int DeleteOrphanPinnedConversations(SqliteConnection conn)
+    {
+        using var tx = conn.BeginTransaction();
+        using var cmd = conn.CreateCommand();
+        cmd.Transaction = tx;
+        cmd.CommandText = @"
+DELETE FROM pinned_conversations
+WHERE phone NOT IN (SELECT DISTINCT phone FROM messages);";
+        var deleted = cmd.ExecuteNonQuery();
+        tx.Commit();
+        return deleted;
+    }
+
+    private long GetDatabaseBytes(SqliteConnection conn)
+    {
+        using var pageCountCmd = conn.CreateCommand();
+        pageCountCmd.CommandText = "PRAGMA page_count;";
+        var pageCount = Convert.ToInt64(pageCountCmd.ExecuteScalar() ?? 0L);
+
+        using var pageSizeCmd = conn.CreateCommand();
+        pageSizeCmd.CommandText = "PRAGMA page_size;";
+        var pageSize = Convert.ToInt64(pageSizeCmd.ExecuteScalar() ?? 0L);
+
+        return Math.Max(0L, pageCount * pageSize);
+    }
+
+    private void Vacuum(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "VACUUM;";
+        cmd.ExecuteNonQuery();
+    }
+}
+
+public sealed record DatabaseMaintenanceResult(
+    int ApiLogsDeleted,
+    int MessagesDeleted,
+    int OutboxDeleted,
+    int OrphanPinsDeleted,
+    bool DatabaseVacuumed,
+    long DatabaseBytes
+)
+{
+    public bool HasChanges =>
+        ApiLogsDeleted > 0
+        || MessagesDeleted > 0
+        || OutboxDeleted > 0
+        || OrphanPinsDeleted > 0
+        || DatabaseVacuumed;
 }
