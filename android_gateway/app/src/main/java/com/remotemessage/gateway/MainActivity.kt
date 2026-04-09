@@ -281,6 +281,7 @@ class MainActivity : ComponentActivity() {
                         GatewayLocalDb(this).use { db ->
                             db.clearPendingUploads()
                         }
+                        GatewayRuntime.resetHistorySyncCursor(this, forceFullNextSync = true)
                         GatewayDebugLog.add(this, "Gateway database cleared by user")
                         textStatus.text = getString(R.string.status_database_cleared)
                     }.onFailure {

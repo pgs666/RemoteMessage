@@ -71,6 +71,7 @@ object GatewayRuntime {
     private const val KEY_PRIVATE = "private_key"
     private const val KEYSTORE_ALIAS = "remote_message_gateway_rsa"
     private const val HISTORY_LAST_SYNC_TS_KEY = "history_last_sync_ts"
+    private const val HISTORY_FORCE_FULL_SYNC_ONCE_KEY = "history_force_full_sync_once"
     private const val SERVER_PUBLIC_KEY_CACHE_MS = 60 * 1000L
     private const val SEND_TRACKER_PREF = "gateway_send_tracker"
 
@@ -396,8 +397,16 @@ object GatewayRuntime {
                 val extendedProjection = arrayOf(Telephony.Sms._ID, Telephony.Sms.ADDRESS, Telephony.Sms.BODY, Telephony.Sms.DATE, Telephony.Sms.TYPE, "sub_id", "subscription_id")
                 val prefs = context.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
                 val lastHistorySyncTs = prefs.getLong(HISTORY_LAST_SYNC_TS_KEY, 0L)
-                val selection = if (lastHistorySyncTs > 0L) "${Telephony.Sms.DATE} > ?" else null
-                val selectionArgs = if (lastHistorySyncTs > 0L) arrayOf(lastHistorySyncTs.toString()) else null
+                val forceFullSyncByFlag = prefs.getBoolean(HISTORY_FORCE_FULL_SYNC_ONCE_KEY, false)
+                val forceFullSyncByServerEmpty = !forceFullSyncByFlag && shouldForceFullHistorySyncByServerState(context, cfg, lastHistorySyncTs)
+                val forceFullSync = forceFullSyncByFlag || forceFullSyncByServerEmpty
+                if (forceFullSync) {
+                    prefs.edit().remove(HISTORY_LAST_SYNC_TS_KEY).remove(HISTORY_FORCE_FULL_SYNC_ONCE_KEY).apply()
+                    GatewayDebugLog.add(context, "History sync switched to full scan (force=$forceFullSyncByFlag, serverEmpty=$forceFullSyncByServerEmpty)")
+                }
+                val baseCursorTs = if (forceFullSync) 0L else lastHistorySyncTs
+                val selection = if (baseCursorTs > 0L) "${Telephony.Sms.DATE} > ?" else null
+                val selectionArgs = if (baseCursorTs > 0L) arrayOf(baseCursorTs.toString()) else null
                 val simSnapshot = GatewaySimSupport.readSnapshot(context)
                 val cursor = runCatching {
                     context.contentResolver.query(uri, extendedProjection, selection, selectionArgs, "${Telephony.Sms.DATE} ASC")
@@ -414,7 +423,7 @@ object GatewayRuntime {
                 }
 
                 var count = 0
-                var latestTimestamp = lastHistorySyncTs
+                var latestTimestamp = baseCursorTs
                 val batch = ArrayList<PendingUploadInput>(200)
                 var lastProgressAt = 0L
                 onProgress?.invoke(0, total)
@@ -473,7 +482,7 @@ object GatewayRuntime {
                     batch.clear()
                 }
 
-                if (latestTimestamp > lastHistorySyncTs) {
+                if (latestTimestamp > baseCursorTs) {
                     prefs.edit().putLong(HISTORY_LAST_SYNC_TS_KEY, latestTimestamp).apply()
                 }
                 onProgress?.invoke(total, total)
@@ -514,6 +523,19 @@ object GatewayRuntime {
         }
     }
 
+    fun resetHistorySyncCursor(context: Context, forceFullNextSync: Boolean = true) {
+        val edit = context.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
+            .edit()
+            .remove(HISTORY_LAST_SYNC_TS_KEY)
+        if (forceFullNextSync) {
+            edit.putBoolean(HISTORY_FORCE_FULL_SYNC_ONCE_KEY, true)
+        } else {
+            edit.remove(HISTORY_FORCE_FULL_SYNC_ONCE_KEY)
+        }
+        edit.apply()
+        GatewayDebugLog.add(context, "History sync cursor reset (forceFullNextSync=$forceFullNextSync)")
+    }
+
     fun clearServerData(context: Context, cfg: GatewayConfig, callback: (String) -> Unit) {
         thread {
             runCatching {
@@ -550,6 +572,7 @@ object GatewayRuntime {
                 context,
                 "Clear server data success: messages=$messagesCleared, outbox=$outboxCleared, pinned=$pinnedCleared, simProfiles=$simProfilesCleared, apiLogs=$apiLogsCleared"
             )
+            resetHistorySyncCursor(context, forceFullNextSync = true)
 
             runCatching {
                 pushSimStateSync(context, cfg)
@@ -562,6 +585,28 @@ object GatewayRuntime {
             } else {
                 "Server data cleared"
             }
+        }
+    }
+
+    private fun shouldForceFullHistorySyncByServerState(context: Context, cfg: GatewayConfig, lastHistorySyncTs: Long): Boolean {
+        if (lastHistorySyncTs <= 0L) {
+            return false
+        }
+
+        return runCatching {
+            val req = Request.Builder()
+                .url("${cfg.serverBaseUrl}/api/client/inbox?sinceTs=0&limit=1")
+                .get()
+                .build()
+            httpClient(context, cfg).newCall(req).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    return false
+                }
+                val body = resp.body?.string() ?: return false
+                JSONArray(body).length() == 0
+            }
+        }.getOrElse {
+            false
         }
     }
 

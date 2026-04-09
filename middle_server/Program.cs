@@ -1021,7 +1021,7 @@ VALUES(
         cmd.Parameters.AddWithValue("$sendStatus", (object?)NormalizeSendStatusText(payload.SendStatus) ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$sendErrorCode", (object?)payload.SendErrorCode ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$sendErrorMessage", (object?)payload.SendErrorMessage ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$updatedAt", payload.UpdatedAt ?? payload.Timestamp);
+        cmd.Parameters.AddWithValue("$updatedAt", payload.UpdatedAt ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
         return cmd.ExecuteNonQuery() > 0;
     }
 
