@@ -545,7 +545,7 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
       final contacts = await FlutterContacts.getAll(properties: {ContactProperty.phone});
       final map = <String, String>{};
       for (final c in contacts) {
-        final name = c.displayName.trim();
+        final name = c.displayName?.trim() ?? '';
         if (name.isEmpty) continue;
         for (final phone in c.phones) {
           for (final key in _buildPhoneMatchKeys(phone.number)) {
@@ -991,6 +991,8 @@ class _MobileChatPageState extends State<MobileChatPage> {
     );
   }
 }
+
+
 
 
 
