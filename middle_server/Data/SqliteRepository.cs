@@ -169,6 +169,51 @@ ON CONFLICT(device_id) DO UPDATE SET
         return v?.ToString();
     }
 
+    public IReadOnlyList<GatewaySummaryRecord> ListGateways(int limit)
+    {
+        limit = Math.Clamp(limit, 1, 2000);
+        using var conn = Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+SELECT
+    g.device_id,
+    g.updated_at,
+    COALESCE((
+        SELECT COUNT(1)
+        FROM gateway_sim_profiles s
+        WHERE s.device_id = g.device_id
+    ), 0) AS sim_profile_count,
+    COALESCE((
+        SELECT COUNT(1)
+        FROM outbox o
+        WHERE o.device_id = g.device_id
+    ), 0) AS pending_outbox_count,
+    (
+        SELECT MAX(m.timestamp)
+        FROM messages m
+        WHERE m.device_id = g.device_id
+    ) AS last_message_timestamp
+FROM gateways g
+ORDER BY g.updated_at DESC
+LIMIT $limit;";
+        cmd.Parameters.AddWithValue("$limit", limit);
+
+        var list = new List<GatewaySummaryRecord>(Math.Min(limit, 512));
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+        {
+            list.Add(new GatewaySummaryRecord(
+                DeviceId: reader.GetString(0),
+                UpdatedAt: reader.IsDBNull(1) ? 0 : reader.GetInt64(1),
+                SimProfileCount: reader.IsDBNull(2) ? 0 : reader.GetInt32(2),
+                PendingOutboxCount: reader.IsDBNull(3) ? 0 : reader.GetInt32(3),
+                LastMessageTimestamp: reader.IsDBNull(4) ? null : reader.GetInt64(4)
+            ));
+        }
+
+        return list;
+    }
+
     public void ReplaceGatewaySimProfiles(string deviceId, IReadOnlyList<GatewaySimProfilePayload> profiles)
     {
         using var conn = Open();

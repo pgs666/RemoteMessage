@@ -56,6 +56,13 @@ public record SmsPayload(
 );
 public record OutboundInstruction(string MessageId, string TargetPhone, string Content, int? SimSlotIndex = null);
 public record GatewaySimProfileRecord(string DeviceId, int SlotIndex, int? SubscriptionId, string? DisplayName, string? PhoneNumber, int SimCount, long UpdatedAt);
+public record GatewaySummaryRecord(
+    string DeviceId,
+    long UpdatedAt,
+    int SimProfileCount,
+    int PendingOutboxCount,
+    long? LastMessageTimestamp
+);
 
 public sealed class PendingOutbound
 {

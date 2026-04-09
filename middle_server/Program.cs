@@ -171,6 +171,12 @@ app.MapGet("/api/client/inbox", (long? sinceTs, int? limit, string? phone, Sqlit
     return Results.Ok(list);
 });
 
+app.MapGet("/api/client/gateways", (int? limit, SqliteRepository repo) =>
+{
+    var list = repo.ListGateways(limit ?? 200);
+    return Results.Ok(list);
+});
+
 app.MapGet("/api/client/device-sims", (string deviceId, SqliteRepository repo) =>
 {
     if (string.IsNullOrWhiteSpace(deviceId) || deviceId.Length > 128)
