@@ -205,7 +205,40 @@ class _MessageHomePageState extends State<MessageHomePage> {
     setState(() => _status = tr('设置已更新', 'Settings updated'));
     _startAutoRefresh();
     await _refreshGatewaySimProfiles(interactive: false);
+    if (result.clearLocalDatabase) {
+      await _clearLocalDatabase();
+      return;
+    }
     await _syncInbox(fullSync: true, interactive: true);
+  }
+
+  Future<void> _clearLocalDatabase() async {
+    if (!mounted) return;
+    setState(() {
+      _loading = true;
+      _syncProgress = null;
+      _status = tr('正在清空本地数据库...', 'Clearing local database...');
+    });
+
+    try {
+      await _db.clearAllUserData();
+      _lastSyncTs = 0;
+      _activePhone = null;
+      _selectedSendSimSlot = _gatewaySimProfiles.isNotEmpty ? _gatewaySimProfiles.first.slotIndex : null;
+      if (_selectedSendSimSlot != null) {
+        await _db.setMetaInt('selectedSendSimSlot', _selectedSendSimSlot!);
+      }
+      await _refreshLocalCaches();
+      if (!mounted) return;
+      setState(() => _status = tr('本地数据库已清空', 'Local database cleared'));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _status = '${tr('清空失败', 'Clear failed')}: $e');
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
   }
 
   Future<void> _refreshGatewaySimProfiles({bool interactive = false}) async {
@@ -896,6 +929,54 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
+  Future<void> _saveAndClose({bool clearLocalDatabase = false}) async {
+    widget.settings.serverBaseUrl = _serverCtrl.text.trim();
+    widget.settings.deviceId = _deviceCtrl.text.trim();
+    widget.settings.password = _passwordCtrl.text.trim();
+    widget.settings.themeMode = _themeMode;
+    await widget.settings.save();
+    if (!mounted) return;
+    Navigator.pop(
+      context,
+      SettingsResult(
+        serverBaseUrl: widget.settings.serverBaseUrl,
+        deviceId: widget.settings.deviceId,
+        password: widget.settings.password,
+        themeMode: _themeMode,
+        clearLocalDatabase: clearLocalDatabase,
+      ),
+    );
+  }
+
+  Future<void> _confirmClearLocalDatabase() async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(tr('清空本地数据库', 'Clear local database')),
+        content: Text(
+          tr(
+            '将清除当前客户端所有本地消息、置顶和同步进度。是否继续？',
+            'This will remove all local messages, pins, and sync progress on this client. Continue?',
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(tr('取消', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(tr('清空', 'Clear')),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _saveAndClose(clearLocalDatabase: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -939,6 +1020,12 @@ class _SettingsPageState extends State<SettingsPage> {
               label: Text(tr('导入服务器证书', 'Import Server Certificate')),
             ),
             const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: _confirmClearLocalDatabase,
+              icon: const Icon(Icons.delete_forever_outlined),
+              label: Text(tr('清空本地数据库', 'Clear local database')),
+            ),
+            const SizedBox(height: 8),
             Align(
               alignment: Alignment.centerLeft,
               child: Text(
@@ -948,23 +1035,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
             const Spacer(),
             FilledButton.icon(
-              onPressed: () async {
-                widget.settings.serverBaseUrl = _serverCtrl.text.trim();
-                widget.settings.deviceId = _deviceCtrl.text.trim();
-                widget.settings.password = _passwordCtrl.text.trim();
-                widget.settings.themeMode = _themeMode;
-                await widget.settings.save();
-                if (!mounted) return;
-                Navigator.pop(
-                  context,
-                  SettingsResult(
-                    serverBaseUrl: widget.settings.serverBaseUrl,
-                    deviceId: widget.settings.deviceId,
-                    password: widget.settings.password,
-                    themeMode: _themeMode,
-                  ),
-                );
-              },
+              onPressed: _saveAndClose,
               icon: const Icon(Icons.save),
               label: Text(tr('保存', 'Save')),
             )
@@ -980,7 +1051,14 @@ class SettingsResult {
   final String deviceId;
   final String password;
   final ThemeMode themeMode;
-  SettingsResult({required this.serverBaseUrl, required this.deviceId, required this.password, required this.themeMode});
+  final bool clearLocalDatabase;
+  SettingsResult({
+    required this.serverBaseUrl,
+    required this.deviceId,
+    required this.password,
+    required this.themeMode,
+    this.clearLocalDatabase = false,
+  });
 }
 
 class AppSettingsStore {
@@ -1291,6 +1369,21 @@ class LocalDatabase {
   Future<void> setMetaString(String key, String value) async {
     await init();
     _db!.execute('INSERT OR REPLACE INTO meta(key, value) VALUES(?, ?);', [key, value]);
+  }
+
+  Future<void> clearAllUserData() async {
+    await init();
+    final db = _db!;
+    db.execute('BEGIN IMMEDIATE;');
+    try {
+      db.execute('DELETE FROM messages;');
+      db.execute('DELETE FROM pins;');
+      db.execute('DELETE FROM meta;');
+      db.execute('COMMIT;');
+    } catch (_) {
+      db.execute('ROLLBACK;');
+      rethrow;
+    }
   }
 
   void _ensureSchema(sqlite.Database db) {

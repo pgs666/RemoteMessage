@@ -1114,6 +1114,13 @@ LIMIT 1;";
 
     private SqliteConnection Open()
     {
+        var conn = OpenRaw();
+        EnsureSchema(conn);
+        return conn;
+    }
+
+    private SqliteConnection OpenRaw()
+    {
         var conn = new SqliteConnection(_connectionString);
         conn.Open();
         return conn;
@@ -1121,7 +1128,12 @@ LIMIT 1;";
 
     private void EnsureSchema()
     {
-        using var conn = Open();
+        using var conn = OpenRaw();
+        EnsureSchema(conn);
+    }
+
+    private void EnsureSchema(SqliteConnection conn)
+    {
         using var cmd = conn.CreateCommand();
         cmd.CommandText = @"
 CREATE TABLE IF NOT EXISTS messages(

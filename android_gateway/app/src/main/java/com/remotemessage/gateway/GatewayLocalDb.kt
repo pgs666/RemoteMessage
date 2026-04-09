@@ -168,6 +168,10 @@ class GatewayLocalDb(context: Context) : SQLiteOpenHelper(context, "gateway_priv
         }
     }
 
+    fun clearPendingUploads() {
+        writableDatabase.delete("pending_uploads", null, null)
+    }
+
     private fun ensureColumns(db: SQLiteDatabase) {
         runCatching { db.execSQL("ALTER TABLE pending_uploads ADD COLUMN sim_slot_index INTEGER") }
         runCatching { db.execSQL("ALTER TABLE pending_uploads ADD COLUMN sim_phone_number TEXT") }

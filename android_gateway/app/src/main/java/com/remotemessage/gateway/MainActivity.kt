@@ -1,6 +1,7 @@
 package com.remotemessage.gateway
 
 import android.Manifest
+import android.app.AlertDialog
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
@@ -92,6 +93,7 @@ class MainActivity : ComponentActivity() {
         val btnImportCert = findViewById<Button>(R.id.btnImportCert)
         val btnRequestSmsRole = findViewById<Button>(R.id.btnRequestSmsRole)
         val btnClearLog = findViewById<Button>(R.id.btnClearLog)
+        val btnClearDatabase = findViewById<Button>(R.id.btnClearDatabase)
         statusTextView = textStatus
         debugLogTextView = textDebugLog
         syncProgressBar = progressSync
@@ -266,6 +268,25 @@ class MainActivity : ComponentActivity() {
         btnClearLog.setOnClickListener {
             GatewayDebugLog.clear(this)
             textStatus.text = getString(R.string.status_debug_log_cleared)
+        }
+
+        btnClearDatabase.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.title_confirm_clear_database))
+                .setMessage(getString(R.string.message_confirm_clear_database))
+                .setNegativeButton(android.R.string.cancel, null)
+                .setPositiveButton(android.R.string.ok) { _, _ ->
+                    runCatching {
+                        GatewayLocalDb(this).use { db ->
+                            db.clearPendingUploads()
+                        }
+                        GatewayDebugLog.add(this, "Gateway database cleared by user")
+                        textStatus.text = getString(R.string.status_database_cleared)
+                    }.onFailure {
+                        textStatus.text = getString(R.string.status_database_clear_failed, it.message ?: "unknown")
+                    }
+                }
+                .show()
         }
     }
 

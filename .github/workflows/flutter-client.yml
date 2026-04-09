@@ -124,14 +124,91 @@ jobs:
       - name: Apply client app icons
         run: python client/apply_client_icons.py client/flutter_client_build client/icons
 
-      - name: Build APK
+      - name: Prepare stable Android signing
+        shell: bash
+        env:
+          ANDROID_CLIENT_KEYSTORE_BASE64: ${{ secrets.ANDROID_CLIENT_KEYSTORE_BASE64 }}
+          ANDROID_CLIENT_KEY_ALIAS: ${{ secrets.ANDROID_CLIENT_KEY_ALIAS }}
+          ANDROID_CLIENT_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_CLIENT_KEYSTORE_PASSWORD }}
+          ANDROID_CLIENT_KEY_PASSWORD: ${{ secrets.ANDROID_CLIENT_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          for key in ANDROID_CLIENT_KEYSTORE_BASE64 ANDROID_CLIENT_KEY_ALIAS ANDROID_CLIENT_KEYSTORE_PASSWORD ANDROID_CLIENT_KEY_PASSWORD; do
+            if [ -z "${!key:-}" ]; then
+              echo "::error::Missing required secret: $key"
+              exit 1
+            fi
+          done
+
+          mkdir -p client/flutter_client_build/android/app
+          echo "$ANDROID_CLIENT_KEYSTORE_BASE64" | base64 -d > client/flutter_client_build/android/app/ci-signing.jks
+          cat > client/flutter_client_build/android/key.properties <<EOF
+          storePassword=${ANDROID_CLIENT_KEYSTORE_PASSWORD}
+          keyPassword=${ANDROID_CLIENT_KEY_PASSWORD}
+          keyAlias=${ANDROID_CLIENT_KEY_ALIAS}
+          storeFile=ci-signing.jks
+          EOF
+
+          if [ -f client/flutter_client_build/android/app/build.gradle.kts ]; then
+            cat >> client/flutter_client_build/android/app/build.gradle.kts <<'EOF'
+
+          val releaseKeystoreProperties = java.util.Properties().apply {
+              val file = rootProject.file("key.properties")
+              file.inputStream().use { load(it) }
+          }
+
+          android {
+              signingConfigs {
+                  create("release") {
+                      keyAlias = releaseKeystoreProperties["keyAlias"] as String
+                      keyPassword = releaseKeystoreProperties["keyPassword"] as String
+                      storeFile = file(releaseKeystoreProperties["storeFile"] as String)
+                      storePassword = releaseKeystoreProperties["storePassword"] as String
+                  }
+              }
+              buildTypes {
+                  getByName("release") {
+                      signingConfig = signingConfigs.getByName("release")
+                  }
+              }
+          }
+          EOF
+          elif [ -f client/flutter_client_build/android/app/build.gradle ]; then
+            cat >> client/flutter_client_build/android/app/build.gradle <<'EOF'
+
+          def releaseKeystoreProperties = new Properties()
+          def releaseKeystorePropertiesFile = rootProject.file('key.properties')
+          releaseKeystoreProperties.load(new FileInputStream(releaseKeystorePropertiesFile))
+
+          android {
+              signingConfigs {
+                  release {
+                      keyAlias releaseKeystoreProperties['keyAlias']
+                      keyPassword releaseKeystoreProperties['keyPassword']
+                      storeFile file(releaseKeystoreProperties['storeFile'])
+                      storePassword releaseKeystoreProperties['storePassword']
+                  }
+              }
+              buildTypes {
+                  release {
+                      signingConfig signingConfigs.release
+                  }
+              }
+          }
+          EOF
+          else
+            echo "::error::Cannot find Android app gradle file in generated Flutter project."
+            exit 1
+          fi
+
+      - name: Build signed release APK
         working-directory: client/flutter_client_build
-        run: flutter build apk --debug
+        run: flutter build apk --release --build-number $GITHUB_RUN_NUMBER --build-name ci.$GITHUB_RUN_NUMBER
 
       - uses: actions/upload-artifact@v4
         with:
-          name: flutter-android-apk
-          path: client/flutter_client_build/build/app/outputs/flutter-apk/app-debug.apk
+          name: flutter-android-release-apk
+          path: client/flutter_client_build/build/app/outputs/flutter-apk/app-release.apk
 
   build-ios:
     runs-on: macos-latest

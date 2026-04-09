@@ -122,6 +122,13 @@
             android:layout_marginTop="8dp"
             android:text="@string/btn_clear_log" />
 
+        <Button
+            android:id="@+id/btnClearDatabase"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="@string/btn_clear_database" />
+
         <ProgressBar
             android:id="@+id/progressSync"
             style="?android:attr/progressBarStyleHorizontal"

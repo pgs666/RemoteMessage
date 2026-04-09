@@ -17,6 +17,7 @@
     <string name="btn_import_cert">Import Server Certificate</string>
     <string name="btn_request_sms_role">Request Default SMS Role</string>
     <string name="btn_clear_log">Clear Gateway Log</string>
+    <string name="btn_clear_database">Clear Gateway Database</string>
     <string name="status_ready">Ready</string>
     <string name="status_saved_auto_sync">Saved + Auto Sync scheduled</string>
     <string name="status_pending_flushed">Pending uploads flushed</string>
@@ -37,4 +38,8 @@
     <string name="status_sim_info_refreshed">SIM info refreshed</string>
     <string name="status_debug_log_empty">Gateway log is empty</string>
     <string name="status_debug_log_cleared">Gateway log cleared</string>
+    <string name="status_database_cleared">Gateway database cleared</string>
+    <string name="status_database_clear_failed">Failed to clear database: %1$s</string>
+    <string name="title_confirm_clear_database">Clear gateway database?</string>
+    <string name="message_confirm_clear_database">This will delete all pending local uploads. Continue?</string>
 </resources>
