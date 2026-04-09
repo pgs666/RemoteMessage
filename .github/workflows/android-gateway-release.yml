@@ -12,6 +12,9 @@ on:
         required: true
         default: "1"
 
+permissions:
+  contents: write
+
 jobs:
   build-release-apk:
     runs-on: ubuntu-latest
@@ -50,8 +53,32 @@ jobs:
           ANDROID_GATEWAY_VERSION_NAME: ${{ inputs.version_name }}
         run: gradle -p android_gateway :app:assembleRelease
 
-      - name: Upload release APK
+      - name: Pack release APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          asset="RemoteMessageGateway-android-${{ inputs.version_name }}-${{ inputs.version_code }}.apk"
+          source_apk="$(ls android_gateway/app/build/outputs/apk/release/*.apk | head -n 1)"
+          cp "$source_apk" "$asset"
+          mkdir -p release-assets/gateway
+          mv "$asset" release-assets/gateway/
+
+      - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: android-gateway-release-apk-v${{ inputs.version_name }}-${{ inputs.version_code }}
-          path: android_gateway/app/build/outputs/apk/release/*.apk
+          path: release-assets/gateway/*
+
+      - name: Publish to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.version_name }}
+          name: ${{ inputs.version_name }}
+          prerelease: true
+          append_body: true
+          body: |
+            - Gateway release
+            - Version code: ${{ inputs.version_code }}
+          files: |
+            release-assets/gateway/*
+          fail_on_unmatched_files: true
