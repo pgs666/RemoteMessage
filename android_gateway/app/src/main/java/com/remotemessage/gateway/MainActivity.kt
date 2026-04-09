@@ -69,8 +69,6 @@ class MainActivity : ComponentActivity() {
         pref = getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
         val editServer = findViewById<EditText>(R.id.editServer)
         val editDeviceId = findViewById<EditText>(R.id.editDeviceId)
-        val editSim1Phone = findViewById<EditText>(R.id.editSim1Phone)
-        val editSim2Phone = findViewById<EditText>(R.id.editSim2Phone)
         val editApiKey = findViewById<EditText>(R.id.editApiKey)
         val editWebUiPort = findViewById<EditText>(R.id.editWebUiPort)
         val textStatus = findViewById<TextView>(R.id.textStatus)
@@ -85,15 +83,12 @@ class MainActivity : ComponentActivity() {
         val btnImportCert = findViewById<Button>(R.id.btnImportCert)
         val btnRequestSmsRole = findViewById<Button>(R.id.btnRequestSmsRole)
         val btnOpenLogPage = findViewById<Button>(R.id.btnOpenLogPage)
-        val btnClearDatabase = findViewById<Button>(R.id.btnClearDatabase)
-        val btnClearServerDatabase = findViewById<Button>(R.id.btnClearServerDatabase)
+        val btnGatewayDataTools = findViewById<Button>(R.id.btnGatewayDataTools)
         statusTextView = textStatus
         syncProgressBar = progressSync
 
         editServer.setText(pref.getString("server_base", "https://10.0.2.2:5001") ?: "")
         editDeviceId.setText(pref.getString("device_id", "android-arm64-gateway") ?: "")
-        editSim1Phone.setText(pref.getString("sim_custom_number_0", "") ?: "")
-        editSim2Phone.setText(pref.getString("sim_custom_number_1", "") ?: "")
         editApiKey.setText(pref.getString("password", pref.getString("api_key", "")) ?: "")
         editWebUiPort.setText(pref.getString("webui_port", "8088") ?: "8088")
         textSimInfo.text = GatewaySimSupport.buildSummaryText(this, isZh = resources.configuration.locales[0].language.startsWith("zh"))
@@ -135,8 +130,6 @@ class MainActivity : ComponentActivity() {
                 .putString("server_base", serverText)
                 .putString("device_id", deviceIdText)
                 .remove("sim_sub_id")
-                .putString("sim_custom_number_0", editSim1Phone.text.toString().trim())
-                .putString("sim_custom_number_1", editSim2Phone.text.toString().trim())
                 .putString("password", passwordText)
                 .putString("webui_port", port.toString())
                 .apply()
@@ -259,52 +252,133 @@ class MainActivity : ComponentActivity() {
             startActivity(Intent(this, GatewayLogActivity::class.java))
         }
 
-        btnClearDatabase.setOnClickListener {
-            AlertDialog.Builder(this)
-                .setTitle(getString(R.string.title_confirm_clear_database))
-                .setMessage(getString(R.string.message_confirm_clear_database))
-                .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton(android.R.string.ok) { _, _ ->
-                    runCatching {
-                        GatewayLocalDb(this).use { db ->
-                            db.clearPendingUploads()
-                        }
-                        GatewayRuntime.resetHistorySyncCursor(this, forceFullNextSync = true)
-                        GatewayDebugLog.add(this, "Gateway database cleared by user")
-                        textStatus.text = getString(R.string.status_database_cleared)
-                    }.onFailure {
-                        textStatus.text = getString(R.string.status_database_clear_failed, it.message ?: "unknown")
-                    }
-                }
-                .show()
+        btnGatewayDataTools.setOnClickListener {
+            showGatewayDataToolsDialog(
+                editServer = editServer,
+                editDeviceId = editDeviceId,
+                editApiKey = editApiKey,
+                textSimInfo = textSimInfo,
+                textStatus = textStatus
+            )
         }
+    }
 
-        btnClearServerDatabase.setOnClickListener {
-            AlertDialog.Builder(this)
-                .setTitle(getString(R.string.title_confirm_clear_server_database))
-                .setMessage(getString(R.string.message_confirm_clear_server_database))
-                .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton(android.R.string.ok) { _, _ ->
-                    showProgress(indeterminate = true)
-                    RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
-                    val cfg = GatewayConfig(
-                        serverBaseUrl = editServer.text.toString().trim(),
-                        deviceId = editDeviceId.text.toString().trim()
-                    )
-                    GatewayRuntime.clearServerData(this, cfg) { result ->
-                        runOnUiThread {
-                            hideProgress()
-                            if (result.startsWith("Clear server data error:")) {
-                                val reason = result.removePrefix("Clear server data error: ").ifBlank { "unknown" }
-                                textStatus.text = getString(R.string.status_server_database_clear_failed, reason)
-                            } else {
-                                textStatus.text = getString(R.string.status_server_database_cleared, result)
-                            }
+    private fun showGatewayDataToolsDialog(
+        editServer: EditText,
+        editDeviceId: EditText,
+        editApiKey: EditText,
+        textSimInfo: TextView,
+        textStatus: TextView
+    ) {
+        val items = arrayOf(
+            getString(R.string.item_edit_sim_numbers),
+            getString(R.string.item_clear_gateway_database),
+            getString(R.string.item_clear_server_database)
+        )
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.title_gateway_data_tools))
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> showEditSimNumbersDialog(editServer, editDeviceId, textSimInfo, textStatus)
+                    1 -> confirmClearGatewayDatabase(textStatus)
+                    2 -> confirmClearServerDatabase(editServer, editDeviceId, editApiKey, textStatus)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .show()
+    }
+
+    private fun showEditSimNumbersDialog(
+        editServer: EditText,
+        editDeviceId: EditText,
+        textSimInfo: TextView,
+        textStatus: TextView
+    ) {
+        val contentView = layoutInflater.inflate(R.layout.dialog_edit_sim_numbers, null, false)
+        val editSim1Phone = contentView.findViewById<EditText>(R.id.editSim1PhoneDialog)
+        val editSim2Phone = contentView.findViewById<EditText>(R.id.editSim2PhoneDialog)
+        editSim1Phone.setText(pref.getString("sim_custom_number_0", "") ?: "")
+        editSim2Phone.setText(pref.getString("sim_custom_number_1", "") ?: "")
+
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.title_edit_sim_numbers))
+            .setView(contentView)
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                pref.edit()
+                    .putString("sim_custom_number_0", editSim1Phone.text.toString().trim())
+                    .putString("sim_custom_number_1", editSim2Phone.text.toString().trim())
+                    .apply()
+
+                textSimInfo.text = GatewaySimSupport.buildSummaryText(
+                    this,
+                    isZh = resources.configuration.locales[0].language.startsWith("zh")
+                )
+                textStatus.text = getString(R.string.status_sim_numbers_saved)
+
+                val cfg = GatewayConfig(
+                    serverBaseUrl = editServer.text.toString().trim(),
+                    deviceId = editDeviceId.text.toString().trim()
+                )
+                if (cfg.serverBaseUrl.isNotBlank() && cfg.deviceId.isNotBlank()) {
+                    GatewayRuntime.pushSimState(this, cfg) {
+                        GatewayDebugLog.add(this, "SIM custom numbers updated: $it")
+                    }
+                }
+            }
+            .show()
+    }
+
+    private fun confirmClearGatewayDatabase(textStatus: TextView) {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.title_confirm_clear_database))
+            .setMessage(getString(R.string.message_confirm_clear_database))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                runCatching {
+                    GatewayLocalDb(this).use { db ->
+                        db.clearPendingUploads()
+                    }
+                    GatewayRuntime.resetHistorySyncCursor(this, forceFullNextSync = true)
+                    GatewayDebugLog.add(this, "Gateway database cleared by user")
+                    textStatus.text = getString(R.string.status_database_cleared)
+                }.onFailure {
+                    textStatus.text = getString(R.string.status_database_clear_failed, it.message ?: "unknown")
+                }
+            }
+            .show()
+    }
+
+    private fun confirmClearServerDatabase(
+        editServer: EditText,
+        editDeviceId: EditText,
+        editApiKey: EditText,
+        textStatus: TextView
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.title_confirm_clear_server_database))
+            .setMessage(getString(R.string.message_confirm_clear_server_database))
+            .setNegativeButton(android.R.string.cancel, null)
+            .setPositiveButton(android.R.string.ok) { _, _ ->
+                showProgress(indeterminate = true)
+                RuntimeConfig.password = editApiKey.text.toString().trim().ifBlank { null }
+                val cfg = GatewayConfig(
+                    serverBaseUrl = editServer.text.toString().trim(),
+                    deviceId = editDeviceId.text.toString().trim()
+                )
+                GatewayRuntime.clearServerData(this, cfg) { result ->
+                    runOnUiThread {
+                        hideProgress()
+                        if (result.startsWith("Clear server data error:")) {
+                            val reason = result.removePrefix("Clear server data error: ").ifBlank { "unknown" }
+                            textStatus.text = getString(R.string.status_server_database_clear_failed, reason)
+                        } else {
+                            textStatus.text = getString(R.string.status_server_database_cleared, result)
                         }
                     }
                 }
-                .show()
-        }
+            }
+            .show()
     }
 
     private fun startWebUiServer(

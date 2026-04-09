@@ -18,6 +18,7 @@
     <string name="btn_import_cert">Import Server Certificate</string>
     <string name="btn_request_sms_role">Request Default SMS Role</string>
     <string name="btn_open_log_page">Open Log Page</string>
+    <string name="btn_gateway_data_tools">SIM &amp; Database Tools</string>
     <string name="btn_clear_log">Clear Gateway Log</string>
     <string name="btn_clear_database">Clear Gateway Database</string>
     <string name="btn_clear_server_database">Clear Server Database</string>
@@ -45,6 +46,7 @@
     <string name="status_history_sync_progress">History sync progress: %1$d/%2$d</string>
     <string name="status_sim_info_empty">SIM info not loaded yet</string>
     <string name="status_sim_info_refreshed">SIM info refreshed</string>
+    <string name="status_sim_numbers_saved">SIM custom numbers saved</string>
     <string name="status_debug_log_empty">Gateway log is empty</string>
     <string name="status_debug_log_cleared">Gateway log cleared</string>
     <string name="status_log_enabled">Gateway log enabled</string>
@@ -63,6 +65,11 @@
     <string name="message_confirm_clear_database">This will delete all pending local uploads. Continue?</string>
     <string name="title_confirm_clear_server_database">Clear server database?</string>
     <string name="message_confirm_clear_server_database">This will delete server messages, outbox queue, SIM profiles, pins, and API logs. Gateway registration is kept. Continue?</string>
+    <string name="title_gateway_data_tools">SIM &amp; Database Tools</string>
+    <string name="item_edit_sim_numbers">Edit SIM custom numbers</string>
+    <string name="item_clear_gateway_database">Clear gateway database</string>
+    <string name="item_clear_server_database">Clear server database</string>
+    <string name="title_edit_sim_numbers">Edit SIM custom numbers</string>
 
     <string name="title_log_page">Gateway Logs</string>
     <string name="label_enable_log">Enable gateway log (recommended)</string>

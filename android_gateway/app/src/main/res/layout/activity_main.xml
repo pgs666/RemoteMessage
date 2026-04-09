@@ -23,20 +23,6 @@
             android:hint="@string/hint_device_id" />
 
         <EditText
-            android:id="@+id/editSim1Phone"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:hint="@string/hint_sim1_phone" />
-
-        <EditText
-            android:id="@+id/editSim2Phone"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:hint="@string/hint_sim2_phone" />
-
-        <EditText
             android:id="@+id/editApiKey"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -123,18 +109,11 @@
             android:text="@string/btn_open_log_page" />
 
         <Button
-            android:id="@+id/btnClearDatabase"
+            android:id="@+id/btnGatewayDataTools"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="8dp"
-            android:text="@string/btn_clear_database" />
-
-        <Button
-            android:id="@+id/btnClearServerDatabase"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/btn_clear_server_database" />
+            android:text="@string/btn_gateway_data_tools" />
 
         <ProgressBar
             android:id="@+id/progressSync"
