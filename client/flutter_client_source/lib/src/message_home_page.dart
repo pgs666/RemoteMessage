@@ -955,6 +955,7 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
 
   @override
   Widget build(BuildContext context) {
+    final isMobileScreen = MediaQuery.sizeOf(context).width < 900;
     return Scaffold(
       appBar: AppBar(
         title: const Text('RemoteMessage'),
@@ -1015,11 +1016,14 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
           ),
         ],
       ),
-      floatingActionButton: FloatingActionButton(
-        onPressed: _loading ? null : _openComposePage,
-        tooltip: tr('新短信', 'New SMS'),
-        child: const Icon(Icons.edit_rounded),
-      ),
+      floatingActionButton: isMobileScreen
+          ? FloatingActionButton(
+              onPressed: _loading ? null : _openComposePage,
+              tooltip: tr('新短信', 'New SMS'),
+              child: const Icon(Icons.edit_rounded),
+            )
+          : null,
+      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 }

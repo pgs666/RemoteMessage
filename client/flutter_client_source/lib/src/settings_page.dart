@@ -409,8 +409,13 @@ class _SettingsPageState extends State<SettingsPage> {
 
   String _formatDateTime(int timestampMs) {
     final dt = DateTime.fromMillisecondsSinceEpoch(timestampMs).toLocal();
+    final now = DateTime.now();
+    final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
     String two(int value) => value.toString().padLeft(2, '0');
-    return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+    if (sameDay) {
+      return '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+    }
+    return _isZh ? '${dt.year}年${dt.month}月${dt.day}日' : '${dt.year}/${two(dt.month)}/${two(dt.day)}';
   }
 
   Widget _buildGatewayOnlineStatusRow() {
@@ -433,15 +438,35 @@ class _SettingsPageState extends State<SettingsPage> {
             : status.isOnline
                 ? tr('网关在线', 'Gateway Online')
                 : tr('网关离线', 'Gateway Offline');
-    final lastSeenText = status?.lastSeenAt == null
-        ? null
-        : '${tr('最近心跳', 'Last seen')}: ${_formatDateTime(status!.lastSeenAt!)}';
+    final lastSeenText =
+        status?.lastSeenAt == null ? '--' : '${tr('最近心跳', 'Last seen')}: ${_formatDateTime(status!.lastSeenAt!)}';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         Row(
           children: [
+            IconButton(
+              tooltip: tr('刷新网关状态', 'Refresh gateway status'),
+              onPressed: _gatewayStatusBusy ? null : () => _refreshGatewayOnlineStatus(interactive: true),
+              icon: _gatewayStatusBusy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+            ),
+            const SizedBox(width: 4),
+            Expanded(
+              child: Text(
+                lastSeenText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
+            ),
+            const SizedBox(width: 8),
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
               decoration: BoxDecoration(
@@ -464,25 +489,8 @@ class _SettingsPageState extends State<SettingsPage> {
                 ],
               ),
             ),
-            const SizedBox(width: 8),
-            IconButton(
-              tooltip: tr('刷新网关状态', 'Refresh gateway status'),
-              onPressed: _gatewayStatusBusy ? null : () => _refreshGatewayOnlineStatus(interactive: true),
-              icon: _gatewayStatusBusy
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2),
-                    )
-                  : const Icon(Icons.refresh),
-            ),
           ],
         ),
-        if (lastSeenText != null)
-          Padding(
-            padding: const EdgeInsets.only(top: 4),
-            child: Text(lastSeenText, style: Theme.of(context).textTheme.bodySmall),
-          ),
         if (_gatewayOnlineStatusError != null && _gatewayOnlineStatusError!.trim().isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 4),
