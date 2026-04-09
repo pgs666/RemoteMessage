@@ -37,6 +37,10 @@
             </intent-filter>
         </activity>
 
+        <activity
+            android:name=".GatewayLogActivity"
+            android:exported="false" />
+
         <receiver
             android:name=".SmsReceiver"
             android:enabled="true"
