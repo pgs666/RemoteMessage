@@ -1436,7 +1436,6 @@ CREATE TABLE IF NOT EXISTS api_logs(
 
 CREATE INDEX IF NOT EXISTS idx_messages_phone_ts ON messages(phone, timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
-CREATE INDEX IF NOT EXISTS idx_messages_updated_at ON messages(updated_at);
 CREATE INDEX IF NOT EXISTS idx_gateway_sim_profiles_device_id ON gateway_sim_profiles(device_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_device_id ON outbox(device_id);
 CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
