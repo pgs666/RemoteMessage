@@ -19,39 +19,44 @@ class SmsReceiver : BroadcastReceiver() {
         val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId)
         val intentResolvedSim = GatewaySimSupport.resolveForIntent(context, intent)
         val messages = Telephony.Sms.Intents.getMessagesFromIntent(intent)
-        messages.forEach { sms ->
-            val resolvedSim = if (intentResolvedSim.slotIndex != null || !intentResolvedSim.simPhoneNumber.isNullOrBlank()) {
-                intentResolvedSim
-            } else {
-                GatewaySimSupport.resolveForSmsRecord(
-                    context = context,
-                    phone = sms.originatingAddress ?: "unknown",
-                    content = sms.messageBody ?: "",
-                    timestamp = sms.timestampMillis,
-                    inbound = true
-                )
-            }
-            val direction = "inbound"
-            val msgId = GatewayRuntime.buildMessageId(
-                deviceId = cfg.deviceId,
-                phone = sms.originatingAddress ?: "unknown",
-                content = sms.messageBody ?: "",
-                timestamp = sms.timestampMillis,
-                direction = direction,
-                simSlotIndex = resolvedSim.slotIndex
-            )
-            GatewayRuntime.uploadInboundSms(
+        if (messages.isEmpty()) return
+
+        val first = messages.first()
+        val phone = first.originatingAddress ?: "unknown"
+        val fullContent = messages.joinToString(separator = "") { it.messageBody ?: "" }
+        val timestamp = messages.minOfOrNull { it.timestampMillis } ?: first.timestampMillis
+
+        val resolvedSim = if (intentResolvedSim.slotIndex != null || !intentResolvedSim.simPhoneNumber.isNullOrBlank()) {
+            intentResolvedSim
+        } else {
+            GatewaySimSupport.resolveForSmsRecord(
                 context = context,
-                cfg = cfg,
-                phone = sms.originatingAddress ?: "unknown",
-                content = sms.messageBody ?: "",
-                timestamp = sms.timestampMillis,
-                direction = direction,
-                messageId = msgId,
-                simSlotIndex = resolvedSim.slotIndex,
-                simPhoneNumber = resolvedSim.simPhoneNumber,
-                simCount = resolvedSim.simCount.takeIf { it > 0 }
+                phone = phone,
+                content = fullContent,
+                timestamp = timestamp,
+                inbound = true
             )
         }
+        val direction = "inbound"
+        val msgId = GatewayRuntime.buildMessageId(
+            deviceId = cfg.deviceId,
+            phone = phone,
+            content = fullContent,
+            timestamp = timestamp,
+            direction = direction,
+            simSlotIndex = resolvedSim.slotIndex
+        )
+        GatewayRuntime.uploadInboundSms(
+            context = context,
+            cfg = cfg,
+            phone = phone,
+            content = fullContent,
+            timestamp = timestamp,
+            direction = direction,
+            messageId = msgId,
+            simSlotIndex = resolvedSim.slotIndex,
+            simPhoneNumber = resolvedSim.simPhoneNumber,
+            simCount = resolvedSim.simCount.takeIf { it > 0 }
+        )
     }
 }
