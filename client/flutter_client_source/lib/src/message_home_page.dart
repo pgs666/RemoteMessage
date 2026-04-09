@@ -4,6 +4,7 @@ import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_contacts/flutter_contacts.dart';
+import 'package:flutter/services.dart';
 
 import 'android_launcher_icon_service.dart';
 import 'app_data.dart';
@@ -705,6 +706,25 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     );
   }
 
+  Widget _buildDesktopConversationPane() {
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(8, 8, 8, 4),
+          child: SizedBox(
+            width: double.infinity,
+            child: FilledButton.icon(
+              onPressed: _loading ? null : _openComposePage,
+              icon: const Icon(Icons.edit_rounded),
+              label: Text(tr('新短信', 'New SMS')),
+            ),
+          ),
+        ),
+        Expanded(child: _buildConversationList(openChatOnTap: false)),
+      ],
+    );
+  }
+
   Widget _buildSimSelectorInComposer() {
     final label = _selectedSendSimSlot == null ? tr('发卡', 'SIM') : _displaySimLabel(_selectedSendSimSlot!);
     return PopupMenuButton<int>(
@@ -956,74 +976,91 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
   @override
   Widget build(BuildContext context) {
     final isMobileScreen = MediaQuery.sizeOf(context).width < 900;
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('RemoteMessage'),
-        actions: [
-          IconButton(
-            onPressed: _loading ? null : _openSettings,
-            icon: const Icon(Icons.settings),
-            tooltip: tr('设置', 'Settings'),
+    return Shortcuts(
+      shortcuts: <ShortcutActivator, Intent>{
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true): const ActivateIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          ActivateIntent: CallbackAction<ActivateIntent>(
+            onInvoke: (_) {
+              if (!isMobileScreen && !_loading) {
+                _openComposePage();
+              }
+              return null;
+            },
           ),
-        ],
-      ),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
-            child: TextField(
-              controller: _searchCtrl,
-              decoration: InputDecoration(
-                labelText: tr('搜索会话 / 内容', 'Search conversation / message'),
-                prefixIcon: const Icon(Icons.search),
-                border: const OutlineInputBorder(),
+        },
+        child: Scaffold(
+          appBar: AppBar(
+            title: const Text('RemoteMessage'),
+            actions: [
+              IconButton(
+                onPressed: _loading ? null : _openSettings,
+                icon: const Icon(Icons.settings),
+                tooltip: tr('设置', 'Settings'),
               ),
-              onTapOutside: (_) => FocusScope.of(context).unfocus(),
-            ),
+            ],
           ),
-          if (_loading || _syncProgress != null)
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 12),
-              child: LinearProgressIndicator(value: _syncProgress),
-            ),
-          if (!_contactsGranted && (Platform.isAndroid || Platform.isIOS))
-            Padding(
-              padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
-              child: Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  tr('联系人权限未开启，列表将显示号码。', 'Contacts permission is off, phone numbers will be shown.'),
-                  style: Theme.of(context).textTheme.bodySmall,
+          body: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 10, 12, 6),
+                child: TextField(
+                  controller: _searchCtrl,
+                  decoration: InputDecoration(
+                    labelText: tr('搜索会话 / 内容', 'Search conversation / message'),
+                    prefixIcon: const Icon(Icons.search),
+                    border: const OutlineInputBorder(),
+                  ),
+                  onTapOutside: (_) => FocusScope.of(context).unfocus(),
                 ),
               ),
-            ),
-          Expanded(
-            child: LayoutBuilder(
-              builder: (context, constraints) {
-                final isMobile = constraints.maxWidth < 900;
-                if (isMobile) {
-                  return _buildConversationList(openChatOnTap: true);
-                }
-                return Row(
-                  children: [
-                    SizedBox(width: 320, child: _buildConversationList(openChatOnTap: false)),
-                    const VerticalDivider(width: 1),
-                    Expanded(child: _buildChatPanel()),
-                  ],
-                );
-              },
-            ),
+              if (_loading || _syncProgress != null)
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 12),
+                  child: LinearProgressIndicator(value: _syncProgress),
+                ),
+              if (!_contactsGranted && (Platform.isAndroid || Platform.isIOS))
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(12, 4, 12, 0),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      tr('联系人权限未开启，列表将显示号码。', 'Contacts permission is off, phone numbers will be shown.'),
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
+                  ),
+                ),
+              Expanded(
+                child: LayoutBuilder(
+                  builder: (context, constraints) {
+                    final isMobile = constraints.maxWidth < 900;
+                    if (isMobile) {
+                      return _buildConversationList(openChatOnTap: true);
+                    }
+                    return Row(
+                      children: [
+                        SizedBox(width: 320, child: _buildDesktopConversationPane()),
+                        const VerticalDivider(width: 1),
+                        Expanded(child: _buildChatPanel()),
+                      ],
+                    );
+                  },
+                ),
+              ),
+            ],
           ),
-        ],
+          floatingActionButton: isMobileScreen
+              ? FloatingActionButton(
+                  onPressed: _loading ? null : _openComposePage,
+                  tooltip: tr('新短信', 'New SMS'),
+                  child: const Icon(Icons.edit_rounded),
+                )
+              : null,
+          floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
+        ),
       ),
-      floatingActionButton: isMobileScreen
-          ? FloatingActionButton(
-              onPressed: _loading ? null : _openComposePage,
-              tooltip: tr('新短信', 'New SMS'),
-              child: const Icon(Icons.edit_rounded),
-            )
-          : null,
-      floatingActionButtonLocation: FloatingActionButtonLocation.endFloat,
     );
   }
 }
