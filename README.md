@@ -1,239 +1,300 @@
 # RemoteMessage
 
-RemoteMessage 是一个三端协作的远程短信系统：
+RemoteMessage 是一个完整的三端协作远程短信系统，允许你通过 Android 手机作为网关，在任何设备上收发短信。
 
-1. **Flutter 客户端**：查看短信、发送短信、搜索和置顶会话
-2. **Android 网关端**：部署在真实安卓手机上，负责收短信、发短信、同步历史短信
-3. **Middle Server (.NET 8)**：负责消息中转、网关注册、公钥管理和消息持久化
+## 系统架构
 
-当前仓库已经包含：
+```
+┌─────────────────┐      HTTPS/RSA-OAEP      ┌─────────────────┐      HTTPS/RSA-OAEP      ┌─────────────────┐
+│  Flutter Client │ ◄──────────────────────► │  Middle Server  │ ◄──────────────────────► │ Android Gateway │
+│  (任意设备)      │                          │   (.NET 8)      │                          │  (安卓手机)      │
+└─────────────────┘                          └─────────────────┘                          └─────────────────┘
+  • 查看/搜索短信                          • 消息中转                                  • 收发系统短信
+  • 发送短信                              • 公钥管理                                  • 历史短信同步
+  • 会话管理/置顶                         • 数据持久化                                • 内网WebUI
+  • 本地SQLite缓存                        • 会话置顶                                   • 双卡支持
+```
 
-- 可运行的三端代码
-- GitHub Actions 构建流水线
-- HTTPS 自签名证书导入流程
-- 非对称加密收发链路
-- 短信历史同步、去重、自动刷新与本地缓存
+### 数据流向
 
----
+**上行（网关→客户端）：**
+```
+Android手机收到短信 → RSA-OAEP加密 → Middle Server解密入库 → Flutter客户端轮询拉取
+```
 
-## 目录结构
-
-```text
-.
-├─ .github/workflows/
-│  ├─ android-gateway.yml
-│  ├─ flutter-client.yml
-│  └─ middle-server.yml
-├─ android_gateway/
-│  ├─ build.gradle
-│  ├─ settings.gradle
-│  └─ app/src/main/...
-├─ client/
-│  └─ flutter_client_source/
-│     └─ lib/main.dart
-└─ middle_server/
-   ├─ Program.cs
-   ├─ RemoteMessage.MiddleServer.csproj
-   └─ README.md
+**下行（客户端→网关）：**
+```
+Flutter客户端发起发送请求 → Middle Server用网关公钥加密任务 → Android网关轮询获取 → 解密后发送
 ```
 
 ---
 
-## 当前功能状态
+## 项目结构
 
-### Flutter 客户端
+```text
+RemoteMessage/
+├── client/                              # Flutter客户端
+│   ├── flutter_client_source/
+│   │   └── lib/main.dart                # 客户端全部源码 (单文件, 1763行)
+│   ├── icons/                           # 应用图标资源
+│   └── apply_client_icons.py            # 图标自动注入脚本
+├── middle_server/                       # 中间服务器 (.NET 8)
+│   ├── Program.cs                       # 服务器全部源码 (1733行)
+│   ├── RemoteMessage.MiddleServer.csproj
+│   └── README.md                        # 服务器详细文档
+├── android_gateway/                     # Android网关应用
+│   ├── app/src/main/
+│   │   ├── java/com/remotemessage/gateway/
+│   │   │   ├── GatewayRuntime.kt        # 核心运行时 (注册/加密/同步)
+│   │   │   ├── MainActivity.kt          # 主界面
+│   │   │   ├── SmsReceiver.kt           # 短信广播接收器
+│   │   │   ├── GatewayLocalDb.kt        # 本地SQLite队列
+│   │   │   ├── GatewayWebUiServer.kt    # 内网WebUI
+│   │   │   ├── GatewaySimSupport.kt     # 多SIM卡支持
+│   │   │   └── ...                      # 其他组件
+│   │   └── res/                         # 资源文件 (含中英文字符串)
+│   ├── build.gradle                     # 项目构建配置
+│   └── app/build.gradle                 # 应用构建配置
+├── .github/workflows/                   # CI/CD流水线
+│   ├── flutter-client.yml               # 客户端多平台构建
+│   ├── android-gateway.yml              # 网关APK构建
+│   └── middle-server.yml                # 服务器发布
+└── README.md                            # 本文件
+```
 
-- 支持 Windows / Android / iOS / Linux 构建
-- 会话列表 + 聊天窗口
-- 新建短信
-- 搜索会话 / 内容
-- 会话置顶
-- 本地 SQLite 缓存消息、设置、置顶状态
-- 全量加载与增量同步
-- 自动轮询刷新，减少手动点击刷新依赖
-- 加载 / 同步进度显示，避免长时间无反馈
-- 设置页可导入 `server-cert.cer`
-- HTTPS 模式下仅信任导入的服务端证书
+---
 
-### Android 网关端
+## 核心功能
 
-- 注册网关公钥到服务器
-- 接收系统短信并上报服务器
-- 轮询服务器并发送待发短信
-- 历史短信同步
-- 历史同步进度条与进度文案
-- 历史同步增量化：会记住上次同步到的短信时间戳
-- 本地待上传队列 SQLite 持久化
-- 队列按 `messageId` 去重
-- 自动补传 + 自动轮询，降低手动刷新的必要性
-- 默认短信应用申请 / 电池优化引导 / 使用情况访问引导
-- 内网 WebUI 控制页
-- 支持导入服务端证书
+### Flutter客户端
+- **跨平台支持**：Linux / Windows / Android / iOS (no-codesign)
+- **会话管理**：会话列表、聊天窗口、搜索、置顶
+- **短信收发**：查看历史短信、新建并发送短信
+- **本地缓存**：SQLite存储消息、设置、置顶状态
+- **智能同步**：自动轮询刷新 (5秒间隔)、增量同步、加载进度显示
+- **证书管理**：设置页导入 `server-cert.cer`，HTTPS模式仅信任导入的证书
+- **双卡支持**：显示并选择网关端的SIM卡槽
+- **主题切换**：Material 3设计，支持亮色/暗色主题
+- **国际化**：简体中文 / 英文双语
+- **响应式布局**：桌面端左右分栏，移动端导航切换
+
+### Android网关
+- **短信网关**：将Android手机转变为短信网关服务器
+- **实时接收**：高优先级广播接收系统短信 (优先级999)
+- **加密上报**：RSA-OAEP加密后上传至服务器
+- **任务轮询**：定期拉取服务器下发的发送任务
+- **历史同步**：批量同步历史短信，支持断点续传 (记住上次同步时间戳)
+- **队列管理**：本地SQLite持久化待上传队列，按 `messageId` 去重
+- **多SIM卡**：自动识别并上报SIM卡槽信息，支持双卡设备
+- **内网WebUI**：基于NanoHTTPD的局域网控制页，远程触发操作
+- **权限引导**：默认短信应用申请、电池优化豁免、使用情况访问引导
+- **自动重试**：后台WorkManager定期同步 (15分钟间隔)，自动补传
+- **证书支持**：导入服务端自签名证书
 
 ### Middle Server
-
-- 网关注册与公钥持久化
-- 网关上行短信解密入库
-- 客户端短信查询接口
-- 客户端下发短信任务给网关
-- 消息去重
-- 会话置顶接口
-- API 访问日志入库
-- 启动时自动生成数据库、配置文件、证书文件
-- 通过 `server.conf` 控制端口和共享密码
-- 发布为 Linux x64 / Linux ARM64 单文件可执行程序
-- SQLite 原生库会随单文件发布一起打包
+- **.NET 8 / ASP.NET Core**：现代高性能后端框架
+- **自动初始化**：首次启动自动生成数据库、配置文件、证书
+- **网关注册**：管理网关公钥，支持多网关
+- **加密转发**：RSA-OAEP加密/解密上下行消息
+- **消息去重**：自动过滤重复短信
+- **会话置顶**：客户端置顶会话持久化
+- **API日志**：所有接口访问记录入库
+- **单文件发布**：Linux x64 / Linux ARM64 单文件可执行程序
+- **内置SQLite**：原生库打包进单文件，无需额外部署
+- **配置管理**：`server.conf` 控制端口和密码，旧版 `password.conf` 自动迁移
 
 ---
 
-## 三端数据与安全模型
+## 快速开始
 
-### 基本链路
-
-- **网关 -> 服务器**：
-  - 网关获取服务器公钥
-  - 用服务器公钥加密短信上报内容
-  - 服务器用内存中的私钥解密并落库
-
-- **客户端 -> 服务器 -> 网关**：
-  - 客户端请求服务器发送短信
-  - 服务器取出网关公钥并加密下发指令
-  - 网关轮询任务并用自己的私钥解密后发送
-
-### 持久化文件
-
-- 服务端：`server.db`
-- 网关端：`gateway_private.db`
-- Flutter 客户端：本地私有 SQLite
-
-### HTTPS 与证书
-
-服务端首次启动会在可执行文件目录生成：
-
-```text
-server.db
-server.conf
-server-cert.cer
-server-cert.pfx
-```
-
-- `server-cert.cer`：给 Flutter 客户端与 Android 网关导入
-- `server-cert.pfx`：服务端自用
-
----
-
-## Quick Start
-
-### 1. 启动 middle server
+### 1. 启动Middle Server
 
 ```bash
 dotnet run --project middle_server/RemoteMessage.MiddleServer.csproj
 ```
 
-首次启动后会自动生成：
+首次启动后会在可执行文件同目录自动生成：
+```
+server.db              # SQLite数据库
+server.conf            # 配置文件
+server-cert.cer        # 客户端/网关注入的证书
+server-cert.pfx        # 服务端自用证书
+```
 
-- `server.db`
-- `server.conf`
-- `server-cert.cer`
-- `server-cert.pfx`
-
-`server.conf` 示例：
-
+编辑 `server.conf` 修改端口和密码：
 ```ini
-# RemoteMessage server.conf
 https_port=5001
 password=replace-with-a-long-random-password
 ```
 
-修改 `server.conf` 后重启服务。
+**发布为单文件 (推荐生产环境)：**
+```bash
+dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
+  -c Release -r linux-x64 --self-contained true \
+  -o publish/linux-x64
+```
 
-### 2. 配置 Android 网关
+### 2. 配置Android网关
 
-在手机上：
-
-1. 安装 Android 网关 APK
-2. 填写：
-   - Server Base URL：`https://<服务器IP>:<https_port>`
-   - Device ID
-   - Password：与 `server.conf` 一致
+1. 构建并安装APK到手机：
+   ```bash
+   gradle -p android_gateway :app:assembleDebug
+   ```
+2. 打开应用，填写配置：
+   - **Server Base URL**：`https://<服务器IP>:5001`
+   - **Device ID**：自定义设备标识
+   - **Password**：与 `server.conf` 中的密码一致
 3. 导入 `server-cert.cer`
-4. 点击 **Register**
-5. 允许短信权限并尽量授予默认短信应用角色
+4. 点击 **Register** 注册到服务器
+5. 授予短信权限，建议设置为默认短信应用
 
-### 3. 配置 Flutter 客户端
+### 3. 配置Flutter客户端
 
-1. 安装 / 运行客户端
-2. 打开设置页
-3. 填写：
-   - Server Base URL：`https://<服务器IP>:<https_port>`
-   - Device ID：与网关一致
-   - Password：与 `server.conf` 一致
-4. 导入 `server-cert.cer`
+客户端构建方式多样，详见下方 [构建指南](#构建指南)。
+
+运行后：
+1. 打开设置页
+2. 填写：
+   - **Server Base URL**：`https://<服务器IP>:5001`
+   - **Device ID**：与网关一致
+   - **Password**：与 `server.conf` 一致
+3. 导入 `server-cert.cer`
+4. 返回主页即可看到会话列表
 
 ---
 
-## 构建与 CI
+## 构建指南
 
-### GitHub Actions
+### 前置要求
+- **Flutter客户端**：Flutter SDK (stable), Python 3 + Pillow, Java 17 (Android), Ninja + GTK (Linux)
+- **Android网关**：Java 17, Gradle 8.7, Android SDK (API 34, min SDK 26)
+- **Middle Server**：.NET 8.0 SDK
 
-- `flutter-client.yml`
-  - 构建 Linux / Windows / Android / iOS(no-codesign)
-- `android-gateway.yml`
-  - 构建并签名 Android Debug APK
-- `middle-server.yml`
-  - 发布 Linux x64 / Linux ARM64 单文件服务端产物
+### Flutter客户端
 
-### 当前发布特性
+CI采用动态生成Flutter项目骨架 + 注入源码的策略，手动构建同理：
 
-middle server 的 Release 发布包含：
+```bash
+# 1. 创建Flutter项目
+flutter create --platforms=android,ios,linux,windows client/flutter_client_build
 
-- `PublishSingleFile=true`
-- `IncludeNativeLibrariesForSelfExtract=true`
-- `IncludeAllContentForSelfExtract=true`
-- `EnableCompressionInSingleFile=true`
+# 2. 添加依赖
+cd client/flutter_client_build
+flutter pub add path path_provider sqlite3 file_selector
 
-也就是说 Linux 下的 SQLite 原生库（例如 `libe_sqlite3.so`）会打进服务端单文件，不再要求手工额外部署该库。
+# 3. 注入源码
+cp ../flutter_client_source/lib/main.dart lib/main.dart
+
+# 4. 应用图标
+python ../apply_client_icons.py . ../icons
+
+# 5. 构建目标平台
+flutter build linux       # Linux
+flutter build windows     # Windows
+flutter build apk         # Android
+flutter build ios --no-codesign  # iOS
+```
+
+### Android网关
+
+```bash
+# Debug APK
+gradle -p android_gateway :app:assembleDebug
+
+# 带签名的Release APK (需配置签名)
+ANDROID_KEYSTORE_PATH=... ANDROID_KEY_ALIAS=... \
+ANDROID_KEYSTORE_PASSWORD=... ANDROID_KEY_PASSWORD=... \
+gradle -p android_gateway :app:assembleRelease
+```
+
+### Middle Server
+
+```bash
+# 开发运行
+dotnet run --project middle_server/RemoteMessage.MiddleServer.csproj
+
+# 发布单文件
+dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
+  -c Release -r linux-x64 --self-contained true \
+  -o publish/linux-x64
+
+dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
+  -c Release -r linux-arm64 --self-contained true \
+  -o publish/linux-arm64
+```
+
+---
+
+## CI/CD流水线
+
+本项目通过GitHub Actions实现自动化构建：
+
+| Workflow | 触发条件 | 构建产物 |
+|----------|----------|----------|
+| **flutter-client.yml** | push / PR | Linux / Windows / Android (signed APK) / iOS (no-codesign app + unsigned IPA) |
+| **android-gateway.yml** | push / PR | Android Debug APK |
+| **middle-server.yml** | push / PR | Linux x64 / Linux ARM64 单文件可执行程序 |
+
+**签名密钥**：Android构建通过GitHub Secrets配置签名，CI自动解码keystore并完成签名。
+
+---
+
+## 安全模型
+
+### 加密链路
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                       网关 → 服务器                           │
+│  1. 网关获取服务器公钥 (/api/crypto/server-public-key)        │
+│  2. 用公钥加密短信内容 (RSA-OAEP)                             │
+│  3. 服务器用内存私钥解密 → 入库                                │
+└──────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────┐
+│                    客户端 → 服务器 → 网关                      │
+│  1. 客户端请求发送短信 (/api/client/send)                     │
+│  2. 服务器取出网关公钥 → 加密下发指令                          │
+│  3. 网关轮询获取任务 (/api/gateway/pull)                      │
+│  4. 用私钥解密 → 发送短信                                     │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### 鉴权机制
+- **共享密码**：`X-Password` 请求头，客户端和网关必须与 `server.conf` 一致
+- **固定时序比较**：防时序攻击
+- **请求体限制**：最大256KB
+- **字段长度校验**：基础输入防护
+
+### HTTPS与证书
+- 服务端自签名证书，首次启动自动生成
+- 客户端/网关手动导入 `.cer` 文件
+- 客户端HTTPS模式下仅信任导入的证书
+
+### 数据持久化
+| 组件 | 存储 | 文件名 |
+|------|------|--------|
+| Middle Server | SQLite | `server.db` |
+| Android Gateway | SQLite | `gateway_private.db` |
+| Flutter Client | SQLite | `client_private.sqlite` (应用私有目录) |
 
 ---
 
 ## 安全评审结论
 
-### 当前是否足够直接暴露公网？
+**当前版本适合：** 局域网 / 家庭网络 / VPN / 内网穿透 / 反向代理后的受控环境
 
-**结论：不够。**
+**不建议直接暴露公网**，原因：
+1. 单一共享密码，非设备级/用户级认证
+2. 缺少限流/防爆破/封禁策略
+3. 缺少防重放机制 (nonce/timestamp/签名)
+4. 缺少设备信任和撤销机制
+5. 缺少公网级监控/告警/备份/审计
 
-当前实现适合：
-
-- 局域网
-- 家庭网络
-- 内网穿透后的受控环境
-- VPN 后访问
-- 反向代理之后再叠加更强防护
-
-### 已具备的基础安全措施
-
-- HTTPS
-- 手工导入并固定信任服务端证书
-- 网关 / 服务端之间非对称加密
-- 共享密码鉴权（`X-Password`）
-- 固定时序密码比较
-- 基础字段长度限制
-- 请求体大小限制
-- 上传解密失败时使用较保守的统一错误返回
-
-### 还不足以直面公网的原因
-
-1. 仍然是**单一共享密码**，不是设备级或用户级认证
-2. 缺少**限流 / 防爆破 / 封禁策略**
-3. 缺少**防重放机制**（nonce / timestamp / 签名）
-4. 缺少更严格的**设备信任和撤销机制**
-5. 缺少公网级别的**监控、告警、备份、审计与外层反向代理防护**
-
-### 如果你要上公网，建议至少补齐
-
-- 反向代理（Nginx / Caddy）+ 正式证书
-- 限流 / IP 访问控制
-- JWT / mTLS / 每设备独立凭据
+**若需上公网，建议补齐：**
+- 反向代理 (Nginx/Caddy) + 正式证书
+- 限流/IP访问控制
+- JWT/mTLS/每设备独立凭据
 - 防重放签名机制
 - 数据库备份与日志监控
 
@@ -241,17 +302,30 @@ middle server 的 Release 发布包含：
 
 ## 注意事项
 
-1. Android 真机权限、后台保活和厂商限制会直接影响可靠性。
-2. 服务端如果重新生成证书，客户端和网关都要重新导入 `server-cert.cer`。
-3. 当前三端已经能稳定工作，但公网安全仍建议通过外层网关和附加鉴权进一步加强。
-4. 历史短信同步已支持增量化；首次同步量大时会显示进度。
-5. Flutter 客户端已经加入自动刷新和加载进度，但在弱网下仍建议保留手动同步作为兜底。
+1. **Android真机限制**：权限、后台保活和厂商限制会直接影响可靠性
+2. **证书更新**：服务端重新生成证书后，客户端和网关需重新导入
+3. **密码同步**：修改 `server.conf` 中的密码后，需同步更新三端配置
+4. **首次同步**：历史短信首次同步量大时会显示进度，请耐心等待
+5. **弱网环境**：客户端有自动刷新，但弱网下仍建议保留手动同步作为兜底
+6. **单文件发布**：Linux下的SQLite原生库 (`libe_sqlite3.so`) 已打包进服务端单文件
 
 ---
 
-## 仓库
+## 技术栈
 
-- GitHub: `https://github.com/pgs666/RemoteMessage`
-- 默认分支：`main`
+| 组件 | 技术 | 语言 | 核心依赖 |
+|------|------|------|----------|
+| Flutter Client | Flutter (Material 3) | Dart | sqlite3, path_provider, file_selector |
+| Android Gateway | Android (Kotlin) | Kotlin | OkHttp 4.12, NanoHTTPD 2.3.1, WorkManager, AndroidX |
+| Middle Server | ASP.NET Core | C# | Microsoft.Data.Sqlite 8.0.4, System.Security.Cryptography |
+| CI/CD | GitHub Actions | - | Flutter Action, .NET Setup, Gradle, Java 17 |
 
-如果只想看 middle server 的细节，请继续阅读：`middle_server/README.md`
+---
+
+## 仓库信息
+
+- **GitHub**: https://github.com/pgs666/RemoteMessage
+- **默认分支**: `main`
+- **许可证**: 参见仓库LICENSE文件
+
+如需深入了解Middle Server的实现细节，请阅读：[middle_server/README.md](middle_server/README.md)
