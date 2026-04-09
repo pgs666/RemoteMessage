@@ -1,4 +1,5 @@
-﻿import 'dart:io';
+﻿import 'dart:convert';
+import 'dart:io';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/material.dart';
 
@@ -22,6 +23,37 @@ class SettingsResult {
     required this.androidLauncherIconMode,
     this.clearLocalDatabase = false,
   });
+}
+
+class GatewayOnlineStatus {
+  final String deviceId;
+  final int? lastSeenAt;
+  final bool isOnline;
+  final int onlineWindowMs;
+  final int checkedAt;
+
+  const GatewayOnlineStatus({
+    required this.deviceId,
+    required this.lastSeenAt,
+    required this.isOnline,
+    required this.onlineWindowMs,
+    required this.checkedAt,
+  });
+
+  factory GatewayOnlineStatus.fromJson(Map<String, dynamic> json) {
+    int? toInt(dynamic value) {
+      if (value is num) return value.toInt();
+      return int.tryParse(value?.toString() ?? '');
+    }
+
+    return GatewayOnlineStatus(
+      deviceId: json['deviceId']?.toString() ?? '',
+      lastSeenAt: toInt(json['lastSeenAt']),
+      isOnline: json['isOnline'] == true,
+      onlineWindowMs: toInt(json['onlineWindowMs']) ?? 120000,
+      checkedAt: toInt(json['checkedAt']) ?? DateTime.now().millisecondsSinceEpoch,
+    );
+  }
 }
 
 class SettingsPage extends StatefulWidget {
@@ -52,6 +84,9 @@ class _SettingsPageState extends State<SettingsPage> {
 
   String _certStatus = '';
   bool _certBusy = false;
+  bool _gatewayStatusBusy = false;
+  GatewayOnlineStatus? _gatewayOnlineStatus;
+  String? _gatewayOnlineStatusError;
 
   bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
@@ -90,6 +125,7 @@ class _SettingsPageState extends State<SettingsPage> {
 
     _loadProfileIntoForm(_activeProfileId);
     _reloadCertStatus();
+    _refreshGatewayOnlineStatus(interactive: false);
   }
 
   @override
@@ -133,6 +169,7 @@ class _SettingsPageState extends State<SettingsPage> {
       _activeProfileId = profileId;
       _loadProfileIntoForm(_activeProfileId);
     });
+    await _refreshGatewayOnlineStatus(interactive: false);
   }
 
   Future<void> _addProfileDialog() async {
@@ -198,6 +235,8 @@ class _SettingsPageState extends State<SettingsPage> {
       _activeProfileId = id;
       _loadProfileIntoForm(_activeProfileId);
     });
+
+    await _refreshGatewayOnlineStatus(interactive: false);
   }
 
   Future<void> _reloadCertStatus() async {
@@ -242,6 +281,72 @@ class _SettingsPageState extends State<SettingsPage> {
     } finally {
       if (mounted) {
         setState(() => _certBusy = false);
+      }
+    }
+  }
+
+  Future<String> _getJson(Uri url, {String? password}) async {
+    final client = await widget.settings.createHttpClient(url, isZh: _isZh);
+    try {
+      final req = await client.getUrl(url);
+      if ((password ?? '').trim().isNotEmpty) {
+        req.headers.set('X-Password', password!.trim());
+      }
+      final resp = await req.close();
+      final body = await utf8.decodeStream(resp);
+      if (resp.statusCode < 200 || resp.statusCode >= 300) {
+        throw Exception('HTTP ${resp.statusCode}: $body');
+      }
+      return body;
+    } finally {
+      client.close(force: true);
+    }
+  }
+
+  Future<void> _refreshGatewayOnlineStatus({bool interactive = false}) async {
+    final server = _serverCtrl.text.trim();
+    final device = _deviceCtrl.text.trim();
+    final password = _passwordCtrl.text.trim();
+    if (server.isEmpty || device.isEmpty) {
+      if (!mounted) return;
+      setState(() {
+        _gatewayOnlineStatus = null;
+        _gatewayOnlineStatusError = tr('请先填写服务器地址和设备 ID', 'Please fill server URL and device ID first');
+      });
+      return;
+    }
+
+    setState(() {
+      _gatewayStatusBusy = true;
+      _gatewayOnlineStatusError = null;
+    });
+
+    try {
+      final uri = Uri.parse('$server/api/client/gateways/${Uri.encodeComponent(device)}/online');
+      final body = await _getJson(uri, password: password);
+      final parsed = GatewayOnlineStatus.fromJson(jsonDecode(body) as Map<String, dynamic>);
+      if (!mounted) return;
+      setState(() {
+        _gatewayOnlineStatus = parsed;
+        _gatewayOnlineStatusError = null;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _gatewayOnlineStatus = null;
+        _gatewayOnlineStatusError = '$e';
+      });
+      if (interactive) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('${tr('获取网关状态失败', 'Failed to fetch gateway status')}: $e'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _gatewayStatusBusy = false);
       }
     }
   }
@@ -302,6 +407,94 @@ class _SettingsPageState extends State<SettingsPage> {
 
   String _simLabel(int slotIndex) => tr('卡${slotIndex + 1}', 'SIM ${slotIndex + 1}');
 
+  String _formatDateTime(int timestampMs) {
+    final dt = DateTime.fromMillisecondsSinceEpoch(timestampMs).toLocal();
+    String two(int value) => value.toString().padLeft(2, '0');
+    return '${dt.year}-${two(dt.month)}-${two(dt.day)} ${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
+  }
+
+  Widget _buildGatewayOnlineStatusRow() {
+    final status = _gatewayOnlineStatus;
+    final isOnline = status?.isOnline ?? false;
+    final bgColor = status == null
+        ? Theme.of(context).colorScheme.surfaceContainerHighest
+        : isOnline
+            ? Colors.green.withValues(alpha: 0.14)
+            : Theme.of(context).colorScheme.errorContainer;
+    final fgColor = status == null
+        ? Theme.of(context).colorScheme.onSurfaceVariant
+        : isOnline
+            ? Colors.green.shade800
+            : Theme.of(context).colorScheme.onErrorContainer;
+    final statusText = _gatewayStatusBusy
+        ? tr('状态检测中…', 'Checking...')
+        : status == null
+            ? tr('状态未知', 'Unknown')
+            : status.isOnline
+                ? tr('网关在线', 'Gateway Online')
+                : tr('网关离线', 'Gateway Offline');
+    final lastSeenText = status?.lastSeenAt == null
+        ? null
+        : '${tr('最近心跳', 'Last seen')}: ${_formatDateTime(status!.lastSeenAt!)}';
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+              decoration: BoxDecoration(
+                color: bgColor,
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(
+                    status == null ? Icons.help_outline : (isOnline ? Icons.check_circle : Icons.error_outline),
+                    size: 16,
+                    color: fgColor,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    statusText,
+                    style: Theme.of(context).textTheme.labelMedium?.copyWith(color: fgColor),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            IconButton(
+              tooltip: tr('刷新网关状态', 'Refresh gateway status'),
+              onPressed: _gatewayStatusBusy ? null : () => _refreshGatewayOnlineStatus(interactive: true),
+              icon: _gatewayStatusBusy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.refresh),
+            ),
+          ],
+        ),
+        if (lastSeenText != null)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(lastSeenText, style: Theme.of(context).textTheme.bodySmall),
+          ),
+        if (_gatewayOnlineStatusError != null && _gatewayOnlineStatusError!.trim().isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              '${tr('状态信息', 'Status detail')}: ${_gatewayOnlineStatusError!.trim()}',
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.error),
+            ),
+          ),
+      ],
+    );
+  }
+
   Widget _buildSimInfoCard() {
     final sims = [...widget.simProfiles]..sort((a, b) => a.slotIndex.compareTo(b.slotIndex));
     return Card(
@@ -311,6 +504,8 @@ class _SettingsPageState extends State<SettingsPage> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             Text(tr('网关号码信息', 'Gateway SIM Numbers'), style: Theme.of(context).textTheme.titleMedium),
+            const SizedBox(height: 8),
+            _buildGatewayOnlineStatusRow(),
             const SizedBox(height: 8),
             if (sims.isEmpty)
               Text(tr('暂无 SIM 信息，请先返回首页刷新。', 'No SIM info yet. Please refresh from home page first.')),
@@ -496,4 +691,3 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 }
-
