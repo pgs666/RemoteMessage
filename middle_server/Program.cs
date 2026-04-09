@@ -1264,7 +1264,6 @@ CREATE INDEX IF NOT EXISTS idx_messages_phone_ts ON messages(phone, timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
 CREATE INDEX IF NOT EXISTS idx_gateway_sim_profiles_device_id ON gateway_sim_profiles(device_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_device_id ON outbox(device_id);
-CREATE INDEX IF NOT EXISTS idx_outbox_device_lease ON outbox(device_id, leased_at);
 CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
 ";
         cmd.ExecuteNonQuery();
@@ -1278,6 +1277,7 @@ CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
         TryExecuteNonQuery(conn, "ALTER TABLE messages ADD COLUMN sim_count INTEGER;");
         TryExecuteNonQuery(conn, "ALTER TABLE outbox ADD COLUMN lease_token TEXT;");
         TryExecuteNonQuery(conn, "ALTER TABLE outbox ADD COLUMN leased_at INTEGER;");
+        TryExecuteNonQuery(conn, "CREATE INDEX IF NOT EXISTS idx_outbox_device_lease ON outbox(device_id, leased_at);");
     }
 
     private void TryExecuteNonQuery(SqliteConnection conn, string sql)
