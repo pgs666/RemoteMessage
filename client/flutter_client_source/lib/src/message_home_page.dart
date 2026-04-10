@@ -28,7 +28,7 @@ class MessageHomePage extends StatefulWidget {
 }
 
 class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingObserver {
-  static const _autoRefreshInterval = Duration(seconds: 20);
+  static const _autoRefreshInterval = Duration(seconds: 5);
 
   late final TextEditingController _serverCtrl;
   late final TextEditingController _deviceCtrl;

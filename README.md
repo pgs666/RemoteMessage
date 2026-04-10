@@ -166,6 +166,398 @@ RemoteMessage/
 
 ---
 
+## 使用教程（预编译产物）
+
+本教程指导你如何下载并使用预编译产物，无需编译源码。
+
+### 前置准备
+
+1. **网络环境**：确保三端在同一局域网或可通过网络互访
+2. **服务器 IP**：确定 Middle Server 所在设备的局域网 IP 地址（例如 `192.168.1.100`）
+3. **下载预编译产物**：从 GitHub Release 页面下载
+
+---
+
+### 第一步：部署 Middle Server
+
+#### 1.1 下载服务端程序
+
+从 [GitHub Releases](https://github.com/pgs666/RemoteMessage/releases) 下载对应平台的单文件可执行程序：
+
+- **Linux x64**：`RemoteMessageServer-linux-x64`
+- **Linux ARM64**（树莓派等）：`RemoteMessageServer-linux-arm64`
+- **Windows x64**：`RemoteMessageServer-windows-x64`
+
+#### 1.2 解压并运行
+
+**Linux:**
+```bash
+# 添加执行权限
+chmod +x RemoteMessageServer-linux-x64
+
+# 运行
+./RemoteMessage.MiddleServer
+```
+
+**Windows:**
+```cmd
+REM 解压 ZIP 文件后，双击运行 RemoteMessageServer-windows-x64.exe
+```
+
+#### 1.3 首次启动自动生成的文件
+
+首次运行后，会在程序同目录自动生成：
+
+```
+server.db                    # SQLite 数据库（自动创建表结构）
+server.conf                  # 配置文件（包含端口和三种令牌）
+server-cert.cer              # HTTPS 证书（需导入到客户端和网关）
+server-cert.pfx              # HTTPS 证书私钥（服务端自用）
+server-crypto-private.pem    # RSA 私钥（用于解密短信）
+onboarding-qr.txt            # 入网 QR 码内容（方便客户端/网关配置）
+server.log                   # 运行日志文件
+```
+
+#### 1.4 查看配置信息
+
+打开 `server.conf` 查看自动生成的令牌：
+
+```ini
+https_port=5001
+gateway_token=<自动生成的24字节Base64字符串>
+client_token=<自动生成的24字节Base64字符串>
+admin_token=<自动生成的24字节Base64字符串>
+log_retention_days=14
+log_max_mb=32
+api_log_retention_days=30
+message_retention_days=0
+db_max_mb=512
+maintenance_interval_minutes=60
+```
+
+**重要**：复制并保存 `gateway_token`、`client_token` 和 `admin_token`，后续配置需要用到。
+
+#### 1.5 获取入网 QR 码
+
+查看 `onboarding-qr.txt` 文件，内容类似：
+
+```
+RMS1|https://192.168.1.100:5001|<client_token>|<gateway_token>
+```
+
+你可以：
+- **方式1**：使用在线 QR 码生成器（如 https://www.qr-code-generator.com/），将此文本生成 QR 码图片
+- **方式2**：使用手机扫描下方终端输出的 ASCII QR 码（Linux/macOS）
+- **方式3**：直接手动复制其中的地址和令牌
+
+#### 1.6 保持服务器运行
+
+- **前台运行**（调试用）：直接运行程序即可
+- **后台运行**（生产环境）：
+  ```bash
+  # Linux 使用 nohup
+  nohup ./RemoteMessageServer-linux-x64 > /dev/null 2>&1 &
+  
+  # 或使用 systemd 服务（推荐）
+  sudo systemctl enable remotemessage
+  sudo systemctl start remotemessage
+  ```
+
+**验证服务器运行**：打开浏览器访问 `https://localhost:5001/healthz`，应看到 `{"ok":true}`。
+
+---
+
+### 第二步：安装并配置 Android 网关
+
+#### 2.1 下载网关 APK
+
+从 [GitHub Releases](https://github.com/pgs666/RemoteMessage/releases) 下载：
+
+- **网关 APK**：`RemoteMessageGateway-android.apk`
+
+#### 2.2 安装到 Android 手机
+
+**方式1：USB 安装**
+```bash
+# 启用手机 USB 调试，连接电脑
+adb install RemoteMessageGateway-android.apk
+```
+
+**方式2：直接传输**
+- 将 APK 文件传输到手机
+- 在手机上点击 APK 文件安装（需允许"未知来源应用"）
+
+#### 2.3 首次启动配置
+
+1. **打开应用**，你会看到配置界面
+
+2. **选择配置方式**：
+
+   **方式A：扫描 QR 码（推荐）**
+   - 点击 **"Scan QR"** 按钮
+   - 扫描服务器生成的 `onboarding-qr.txt` 中的 QR 码
+   - 自动填充服务器地址和网关令牌
+
+   **方式B：手动填写**
+   - **Server Base URL**：`https://<服务器IP>:5001`
+     - 例如：`https://192.168.1.100:5001`
+   - **Device ID**：自定义设备标识，例如 `my-android-phone`
+   - **Gateway Token**：从 `server.conf` 复制 `gateway_token` 的值
+
+3. **导入服务器证书**
+   - 点击 **"Import Certificate"** 按钮
+   - 选择从服务器目录复制过来的 `server-cert.cer` 文件
+   - 提示导入成功后继续
+
+4. **注册到服务器**
+   - 点击 **"Register"** 按钮
+   - 等待提示注册成功
+
+5. **授予权限**
+   - 应用会请求短信权限，点击 **"允许"**
+   - **强烈建议**：设置为默认短信应用，不然会导致短信发送功能异常
+     - 点击 **"Set as Default SMS"** 按钮
+     - 在系统弹窗中确认
+   - **可选但推荐**：忽略电池优化
+     - 点击 **"Ignore Battery Optimization"** 按钮
+
+6. **启动前台服务**
+   - 点击 **"Start Foreground Service"** 按钮
+   - 通知栏会显示持续运行的通知，确保后台同步不被杀死
+
+#### 2.4 验证网关工作
+
+- 查看应用界面状态，应显示 **"Registered"** 和 **"Online"**
+- 打开手机自带短信应用，发送一条测试短信到你的手机
+- 返回网关应用，应看到短信已拦截并上传成功
+
+#### 2.5 使用内网 WebUI（可选）
+
+网关内置局域网 Web 控制面板：
+
+1. 在电脑浏览器访问：`http://<手机IP>:8088`
+   - 例如：`http://192.168.1.101:8088`
+2. 页面上显示：
+   - 服务器地址、设备 ID
+   - SIM 卡信息（卡槽、号码）
+   - 操作按钮（注册、轮询、同步历史短信等）
+
+#### 2.6 同步历史短信（可选）
+
+如需将手机已有的历史短信同步到服务器：
+
+1. 在网关应用中点击 **"Sync Historical SMS"**
+2. 等待同步进度条完成
+3. 同步完成后，历史短信会在客户端显示
+
+---
+
+### 第三步：安装并配置 Flutter 客户端
+
+根据你的设备平台选择对应的客户端：
+
+#### 3.1 下载客户端
+
+从 [GitHub Releases](https://github.com/pgs666/RemoteMessage/releases) 下载：
+
+| 平台 | 文件 | 说明 |
+|------|------|------|
+| **Windows** | `flutter-client-windows.zip` | 解压后运行 `RemoteMessage.exe` |
+| **Windows (安装包)** | `flutter-client-windows-setup.exe` | Inno Setup 安装包 |
+| **Linux (tar.gz)** | `flutter-client-linux.tar.gz` | 解压后运行 `RemoteMessage` |
+| **Linux (deb)** | `flutter-client-linux.deb` | Debian/Ubuntu 安装包 |
+| **Linux (rpm)** | `flutter-client-linux.rpm` | Fedora/CentOS 安装包 |
+| **Linux (AppImage)** | `flutter-client-linux.AppImage` | 直接运行 |
+| **Android** | `flutter-client-android.apk` | 安装到手机 |
+| **iOS** | `flutter-client-ios.ipa` | 需侧载（未签名） |
+
+#### 3.2 安装客户端
+
+**Windows:**
+- 方式1：双击 `flutter-client-windows-setup.exe` 按向导安装
+- 方式2：解压 ZIP 后双击运行 `RemoteMessage.exe`
+
+**Linux:**
+```bash
+# 方式1：deb 包（Ubuntu/Debian）
+sudo dpkg -i flutter-client-linux.deb
+
+# 方式2：tar.gz
+tar -xzf flutter-client-linux.tar.gz
+cd flutter-client-linux
+./RemoteMessage
+
+# 方式3：AppImage
+chmod +x flutter-client-linux.AppImage
+./flutter-client-linux.AppImage
+```
+
+**macOS:**
+```bash
+# 解压后拖入 Applications
+unzip flutter-client-macos.zip
+# 或双击运行
+```
+
+**Android:**
+```bash
+adb install flutter-client-android.apk
+```
+
+#### 3.3 首次启动配置
+
+1. **打开应用**，进入主界面
+
+2. **打开设置页**：
+   - 点击左上角菜单按钮（三条横线图标）
+   - 选择 **"Settings"**
+
+3. **选择配置方式**：
+
+   **方式A：扫描 QR 码（推荐）**
+   - 在设置页点击 **"Scan Onboarding QR"**
+   - 扫描服务器生成的 `onboarding-qr.txt` 中的 QR 码
+   - 自动填充服务器地址和客户端令牌
+
+   **方式B：手动填写**
+   - 点击 **"Server Settings"** 区域
+   - **Server Base URL**：`https://<服务器IP>:5001`
+   - **Client Token**：从 `server.conf` 复制 `client_token` 的值
+   - **Device ID**：与网关保持一致（例如 `my-android-phone`）
+
+4. **导入服务器证书**（HTTPS 自签名证书）
+   - 在设置页点击 **"Import Server Certificate"**
+   - 选择从服务器目录复制过来的 `server-cert.cer` 文件
+   - 提示导入成功后继续
+
+5. **保存设置**
+   - 点击 **"Save"** 按钮
+   - 返回主页面
+
+#### 3.4 验证客户端工作
+
+1. **查看会话列表**
+   - 主页应显示从网关同步过来的短信会话
+   - 每个会话显示对方号码、最后一条消息、时间
+
+2. **查看短信详情**
+   - 点击任意会话进入聊天视图
+   - 显示该号码的所有历史短信
+
+3. **发送测试短信**
+   - 点击 **"Compose"** 按钮（铅笔图标）
+   - 输入对方号码和短信内容
+   - 如果网关是多卡设备，可选择 SIM 卡槽
+   - 点击发送
+
+4. **验证自动刷新**
+   - 客户端默认每 20 秒自动同步一次
+   - 等待新短信自动出现，或下拉手动刷新
+
+#### 3.5 高级功能使用
+
+**置顶会话：**
+- 在会话列表长按某个会话
+- 选择 **"Pin"** 将其置顶
+
+**搜索会话：**
+- 在主页顶部搜索框输入关键词
+- 支持搜索号码或短信内容
+
+**联系人集成（Android）：**
+- 授予联系人权限后，会话列表会显示联系人姓名而非号码
+
+**主题切换：**
+- 设置页可选择亮色/暗色/跟随系统主题
+
+**Android 启动器图标：**
+- 设置页可切换默认/亮色/暗色三种图标模式
+
+**多 Profile 管理：**
+- 设置页可添加多个服务器配置
+- 在不同服务器之间快速切换
+
+---
+
+### 第四步：完整工作流程验证
+
+#### 4.1 接收短信测试
+
+1. 让其他人给你的 Android 网关手机发短信
+2. 等待约 20 秒（客户端自动刷新间隔）
+3. 在 Flutter 客户端查看是否收到短信
+4. 或下拉手动刷新立即查看
+
+#### 4.2 发送短信测试
+
+1. 在 Flutter 客户端点击 **"Compose"**
+2. 输入号码和内容并发送
+3. 查看 Android 网关手机的已发送短信
+4. 确认对方收到短信
+
+#### 4.3 历史短信同步
+
+1. 在网关应用中点击 **"Sync History"**
+2. 等待同步完成
+3. 在客户端查看历史短信是否出现
+
+---
+
+### 常见问题排查
+
+#### Q1: 客户端连接失败，提示 TLS 错误
+
+**原因**：未导入自签名证书
+
+**解决**：
+1. 从服务器目录复制 `server-cert.cer` 到客户端设备
+2. 在客户端设置页点击 **"Import Server Certificate"**
+3. 选择该证书文件
+
+#### Q2: 网关注册失败
+
+**可能原因**：
+- 服务器地址填写错误
+- 网关令牌不正确
+- 网络不通
+
+**排查步骤**：
+1. 确认 `server.conf` 中的 `gateway_token` 与网关填写的一致
+2. 在网关手机浏览器访问 `https://<服务器IP>:5001/healthz`，确认可达
+3. 查看服务器日志 `server.log` 中的错误信息
+
+#### Q3: 客户端看不到短信
+
+**可能原因**：
+- 网关未成功注册
+- 网关未上传短信
+- 客户端令牌不正确
+
+**排查步骤**：
+1. 检查网关应用状态，确认显示 **"Registered"** 和 **"Online"**
+2. 在网关应用点击 **"Poll & Send"** 手动触发一次轮询
+3. 检查客户端设置中的 `client_token` 与 `server.conf` 一致
+4. 在客户端设置页点击 **"Sync Now"** 手动同步
+
+#### Q4: Android 网关后台被杀死
+
+**解决方案**：
+1. 在网关应用中点击 **"Start Foreground Service"**
+2. 忽略电池优化（设置页按钮）
+3. 在手机设置中将应用设为"不受限制"的后台运行
+4. 不同手机厂商可能有额外限制，请参考对应品牌的后台保活设置
+
+#### Q5: 修改了 server.conf 后客户端/网关连不上
+
+**原因**：修改配置后未重启服务器
+
+**解决**：
+1. 停止当前运行的服务器进程
+2. 重新启动服务器
+3. 如果修改了端口或令牌，需同步更新客户端和网关的配置
+
+---
+
 ## 快速开始
 
 ### 1. 启动Middle Server
