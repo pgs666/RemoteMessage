@@ -43,7 +43,7 @@ app.Logger.LogInformation(
     AppContext.BaseDirectory
 );
 app.Logger.LogInformation("Loaded config {ServerConfPath}; HTTPS port={HttpsPort}", serverSettings.ServerConfigFilePath, serverSettings.HttpsPort);
-app.Logger.LogInformation("Runtime files are created beside the executable: server.db, server.conf, server-cert.cer, server-cert.pfx, server-crypto-private.pem");
+app.Logger.LogInformation("Runtime files are created beside the executable: server.db, server.conf, server-cert.cer (root CA), server-cert.pfx (server TLS certificate), server-crypto-private.pem");
 app.Logger.LogInformation("SQLite database path: {DatabaseFilePath}", startupRepo.DatabaseFilePath);
 app.Logger.LogInformation("Server log path: {ServerLogPath}", serverLogPath);
 app.Logger.LogInformation("Server crypto private key path: {ServerCryptoKeyPath}", startupCrypto.PrivateKeyFilePath);

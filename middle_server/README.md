@@ -68,8 +68,8 @@ middle_server/
 ```text
 server.db                    # SQLite 数据库
 server.conf                  # 服务端配置文件
-server-cert.cer              # 客户端/网关注入的证书
-server-cert.pfx              # 服务端自用 HTTPS 证书
+server-cert.cer              # 客户端/网关注入的根证书
+server-cert.pfx              # 服务端自用 HTTPS 证书包
 server-crypto-private.pem    # 服务器 RSA 私钥
 onboarding-qr.txt            # 入网 QR 码内容 (首次启动)
 server.log                   # 运行日志 (自动轮转)
@@ -79,8 +79,8 @@ server.log                   # 运行日志 (自动轮转)
 
 - `server.db`：SQLite 数据库，自动创建并初始化所有表结构，无需手工预建
 - `server.conf`：服务端配置文件，自动生成，包含端口和三种令牌
-- `server-cert.cer`：给 Flutter 客户端 / Android 网关导入信任
-- `server-cert.pfx`：服务端自身 HTTPS 证书，请妥善保管
+- `server-cert.cer`：给 Flutter 客户端 / Android 网关导入信任的根证书
+- `server-cert.pfx`：服务端自身 HTTPS 证书包，请妥善保管
 - `server-crypto-private.pem`：RSA-OAEP 解密用私钥，切勿泄露
 - `onboarding-qr.txt`：包含 JSON 格式的入网配置，可直接生成 QR 码
 - `server.log`：运行日志文件，自动轮转 (默认最大 32MB，保留 14 天)
@@ -497,7 +497,7 @@ CREATE TABLE api_logs (
 ```
 2026-04-09 10:00:00.123 [INF] RemoteMessage middle server starting. Runtime directory=/opt/remotemessage; ExecutablePath=/opt/remotemessage/RemoteMessage.MiddleServer; AppContext.BaseDirectory=/opt/remotemessage/
 2026-04-09 10:00:00.234 [INF] Loaded config /opt/remotemessage/server.conf; HTTPS port=5001
-2026-04-09 10:00:00.345 [INF] Runtime files are created beside the executable: server.db, server.conf, server-cert.cer, server-cert.pfx, server-crypto-private.pem
+2026-04-09 10:00:00.345 [INF] Runtime files are created beside the executable: server.db, server.conf, server-cert.cer (root CA), server-cert.pfx (server TLS certificate), server-crypto-private.pem
 2026-04-09 10:00:00.456 [INF] SQLite database path: /opt/remotemessage/server.db
 2026-04-09 10:00:00.567 [INF] Server log path: /opt/remotemessage/server.log
 2026-04-09 10:00:00.678 [INF] Server crypto private key path: /opt/remotemessage/server-crypto-private.pem
@@ -593,7 +593,7 @@ Failed to bind to address http://[::]:5001: address already in use.
 HttpRequestException: The SSL connection could not be established
 ```
 
-**解决方案**：确保客户端/网关已导入 `server-cert.cer`。
+**解决方案**：确保客户端/网关已导入 `server-cert.cer` 根证书。
 
 #### 3. 令牌鉴权失败
 
@@ -611,14 +611,14 @@ HttpRequestException: The SSL connection could not be established
 
 #### 5. 证书丢失
 
-**解决方案**：重启服务，证书会自动重新生成。然后客户端/网关需要重新导入新的 `server-cert.cer`。
+**解决方案**：重启服务，证书会自动重新生成。然后客户端/网关需要重新导入新的 `server-cert.cer` 根证书。
 
 ---
 
 ## 备注
 
 - `server.db` 会在启动时自动创建并初始化所有表结构，不需要手工初始化
-- 证书文件和私钥文件丢失后会重新生成；重新生成后客户端和网关需要重新导入 `server-cert.cer`
+- 证书文件和私钥文件丢失后会重新生成；重新生成后客户端和网关需要重新导入 `server-cert.cer` 根证书
 - 如果你只关心运行，部署时通常只需要把发布出来的**单个服务端可执行文件**放到目标目录并启动即可
 - 推荐在生产环境中使用 `onboarding-qr.txt` 配合 QR 码生成器生成二维码，方便客户端和网关扫描
 - 所有令牌都是高强度随机字符串，请勿使用弱密码或短字符串替换

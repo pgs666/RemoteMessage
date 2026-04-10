@@ -111,7 +111,8 @@ jobs:
           tag_name: ${{ inputs.version_name }}
           name: ${{ inputs.version_name }}
           prerelease: true
-          append_body: true
+          append_body: false
+          overwrite_files: true
           body: |
             - Middle server release
             - Version code: ${{ inputs.version_code }}

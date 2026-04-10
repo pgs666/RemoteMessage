@@ -125,7 +125,7 @@ RemoteMessage/
 - **短信收发**：查看历史短信、新建并发送短信
 - **本地缓存**：SQLite存储消息、设置、置顶状态
 - **智能同步**：自动轮询刷新 (20秒间隔)、增量同步、加载进度显示
-- **证书管理**：设置页导入 `server-cert.cer`，HTTPS模式仅信任导入的证书
+- **证书管理**：设置页导入 `server-cert.cer` 根证书，HTTPS模式仅信任导入的证书
 - **双卡支持**：显示并选择网关端的SIM卡槽
 - **主题切换**：Material 3设计，支持亮色/暗色主题
 - **国际化**：简体中文 / 英文双语
@@ -145,7 +145,7 @@ RemoteMessage/
 - **内网WebUI**：基于NanoHTTPD的局域网控制页
 - **权限引导**：默认短信应用申请、电池优化豁免、使用情况访问引导
 - **自动重试**：后台WorkManager定期同步，自动补传
-- **证书支持**：导入服务端自签名证书
+- **证书支持**：导入服务端根证书
 - **QR码扫描**：使用ZXing库扫描入网QR码
 - **前台服务**：保持网关应用在后台运行
 - **日志查看**：内置调试日志和活动日志查看器
@@ -211,8 +211,8 @@ REM 解压 ZIP 文件后，双击运行 RemoteMessageServer-windows-x64.exe
 ```
 server.db                    # SQLite 数据库（自动创建表结构）
 server.conf                  # 配置文件（包含端口和三种令牌）
-server-cert.cer              # HTTPS 证书（需导入到客户端和网关）
-server-cert.pfx              # HTTPS 证书私钥（服务端自用）
+server-cert.cer              # HTTPS 根证书（需导入到客户端和网关）
+server-cert.pfx              # HTTPS 服务端证书包（服务端自用）
 server-crypto-private.pem    # RSA 私钥（用于解密短信）
 onboarding-qr.txt            # 入网 QR 码内容（方便客户端/网关配置）
 server.log                   # 运行日志文件
@@ -425,7 +425,7 @@ adb install flutter-client-android.apk
    - **Client Token**：从 `server.conf` 复制 `client_token` 的值
    - **Device ID**：与网关保持一致（例如 `my-android-phone`）
 
-4. **导入服务器证书**（HTTPS 自签名证书）
+4. **导入服务器根证书**（HTTPS 自签名根证书）
    - 在设置页点击 **"Import Server Certificate"**
    - 选择从服务器目录复制过来的 `server-cert.cer` 文件
    - 提示导入成功后继续
@@ -507,7 +507,7 @@ adb install flutter-client-android.apk
 
 #### Q1: 客户端连接失败，提示 TLS 错误
 
-**原因**：未导入自签名证书
+**原因**：未导入服务端根证书
 
 **解决**：
 1. 从服务器目录复制 `server-cert.cer` 到客户端设备
@@ -570,7 +570,7 @@ dotnet run --project middle_server/RemoteMessage.MiddleServer.csproj
 ```
 server.db              # SQLite数据库
 server.conf            # 配置文件
-server-cert.cer        # 客户端/网关注入的证书
+server-cert.cer        # 客户端/网关注入的根证书
 server-cert.pfx        # 服务端自用证书
 server-crypto-private.pem  # 服务器RSA私钥
 onboarding-qr.txt      # 入网QR码内容 (首次启动)
@@ -616,7 +616,7 @@ dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
    - **手动填写**：
      - **Server Base URL**：`https://<服务器IP>:5001`
      - **Client Token**：与 `server.conf` 中的 `client_token` 一致
-2. 导入 `server-cert.cer` (HTTPS自签名证书)
+2. 导入 `server-cert.cer` (HTTPS 根证书)
 3. 返回主页即可看到会话列表
 
 ---
@@ -733,8 +733,8 @@ dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
 - **字段长度校验**：基础输入防护
 
 ### HTTPS与证书
-- 服务端自签名证书，首次启动自动生成
-- 客户端/网关手动导入 `.cer` 文件
+- 服务端根证书和 TLS 证书，首次启动自动生成
+- 客户端/网关手动导入 `.cer` 根证书
 - 客户端HTTPS模式下仅信任导入的证书
 
 ### 数据持久化
