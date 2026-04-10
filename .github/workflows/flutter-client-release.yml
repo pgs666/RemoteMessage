@@ -80,6 +80,9 @@ jobs:
       - name: Configure client app identity
         run: python client/configure_client_app_identity.py client/flutter_client_build
 
+      - name: Configure desktop support
+        run: python client/configure_client_desktop_support.py client/flutter_client_build
+
       - name: Build Linux
         working-directory: client/flutter_client_build
         run: flutter build linux --release
@@ -94,79 +97,16 @@ jobs:
             ls -R client/flutter_client_build/build/linux || true
             exit 1
           fi
-
           mkdir -p release-assets/linux
-
-          # Keep portable tarball
-          tar -C "$(dirname "$bundle_dir")" -czf "release-assets/linux/RemoteMessageClient-linux-${{ matrix.arch }}-${{ inputs.version_name }}-${{ inputs.version_code }}.tar.gz" bundle
-
-          # Native version should avoid '_' for rpm/deb internals
-          pkg_version="$(echo "${{ inputs.version_name }}" | tr -cd '0-9A-Za-z.')"
-          if [ -z "$pkg_version" ]; then
-            pkg_version="0.0.1"
-          fi
-
-          fpm -s dir -t deb \
-            -n remotemessage-client \
-            -v "$pkg_version" \
-            --iteration "${{ inputs.version_code }}" \
-            --architecture "${{ matrix.deb_arch }}" \
-            --description "RemoteMessage desktop client" \
-            --maintainer "RemoteMessage" \
-            --prefix /opt/RemoteMessageClient \
-            -C "$bundle_dir" \
-            -p "release-assets/linux/RemoteMessageClient-linux-${{ matrix.arch }}-${{ inputs.version_name }}-${{ inputs.version_code }}.deb" \
-            .
-
-          fpm -s dir -t rpm \
-            -n remotemessage-client \
-            -v "$pkg_version" \
-            --iteration "${{ inputs.version_code }}" \
-            --architecture "${{ matrix.rpm_arch }}" \
-            --description "RemoteMessage desktop client" \
-            --maintainer "RemoteMessage" \
-            --prefix /opt/RemoteMessageClient \
-            -C "$bundle_dir" \
-            -p "release-assets/linux/RemoteMessageClient-linux-${{ matrix.arch }}-${{ inputs.version_name }}-${{ inputs.version_code }}.rpm" \
-            .
-
-          # AppImage
-          exec_path="$(find "$bundle_dir" -maxdepth 1 -type f -executable | head -n1 || true)"
-          if [ -z "$exec_path" ]; then
-            echo "::error::Cannot find executable in bundle root"
-            find "$bundle_dir" -maxdepth 2 -type f | sed 's/^/  /'
-            exit 1
-          fi
-          exec_name="$(basename "$exec_path")"
-
-          appdir="appdir-${{ matrix.arch }}"
-          rm -rf "$appdir"
-          mkdir -p "$appdir"
-          cp -R "$bundle_dir"/. "$appdir"/
-
-          printf '%s\n' \
-            '#!/bin/sh' \
-            'HERE="$(dirname "$(readlink -f "$0")")"' \
-            "exec \"\$HERE/$exec_name\" \"\$@\"" \
-            > "$appdir/AppRun"
-          chmod +x "$appdir/AppRun"
-
-          printf '%s\n' \
-            '[Desktop Entry]' \
-            'Type=Application' \
-            'Name=RemoteMessage' \
-            'Comment=RemoteMessage desktop client' \
-            "Exec=$exec_name" \
-            'Icon=remotemessage' \
-            'Categories=Network;' \
-            'Terminal=false' \
-            > "$appdir/remotemessage.desktop"
-
-          cp client/icons/Icon12-iOS-Default-1024x1024@1x.png "$appdir/remotemessage.png"
-
-          curl -L "${{ matrix.appimagetool_url }}" -o appimagetool
-          chmod +x appimagetool
-          APPIMAGE_EXTRACT_AND_RUN=1 ./appimagetool "$appdir" "release-assets/linux/RemoteMessageClient-linux-${{ matrix.arch }}-${{ inputs.version_name }}-${{ inputs.version_code }}.AppImage"
+          bash client/linux_package_release.sh \
+            "$bundle_dir" \
+            "release-assets/linux" \
+            "${{ inputs.version_name }}" \
+            "${{ inputs.version_code }}" \
+            "${{ matrix.arch }}" \
+            "${{ matrix.deb_arch }}" \
+            "${{ matrix.rpm_arch }}" \
+            "${{ matrix.appimagetool_url }}"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -209,6 +149,9 @@ jobs:
 
       - name: Configure client app identity
         run: python client/configure_client_app_identity.py client/flutter_client_build
+
+      - name: Configure desktop support
+        run: python client/configure_client_desktop_support.py client/flutter_client_build
 
       - name: Build Windows
         working-directory: client/flutter_client_build
@@ -550,6 +493,9 @@ jobs:
       - name: Configure client app identity
         run: python client/configure_client_app_identity.py client/flutter_client_build
 
+      - name: Configure desktop support
+        run: python client/configure_client_desktop_support.py client/flutter_client_build
+
       - name: Build macOS
         working-directory: client/flutter_client_build
         run: flutter build macos --release
@@ -599,7 +545,8 @@ jobs:
           tag_name: ${{ inputs.version_name }}
           name: ${{ inputs.version_name }}
           prerelease: true
-          append_body: true
+          append_body: false
+          overwrite_files: true
           body: |
             - Client release
             - Version code: ${{ inputs.version_code }}

@@ -1,4 +1,6 @@
-﻿import 'package:flutter/material.dart';
+﻿import 'dart:io';
+
+import 'package:flutter/material.dart';
 
 import 'android_launcher_icon_service.dart';
 import 'app_data.dart';
@@ -12,8 +14,20 @@ class RemoteMessageApp extends StatefulWidget {
 }
 
 class _RemoteMessageAppState extends State<RemoteMessageApp> {
+  static const String _desktopFontFamily = 'RemoteMessageDesktopFallback';
   final settings = AppSettingsStore();
   ThemeMode _themeMode = ThemeMode.system;
+
+  bool get _useBundledDesktopFont => Platform.isLinux || Platform.isWindows || Platform.isMacOS;
+
+  ThemeData _buildTheme(Brightness brightness) {
+    return ThemeData(
+      colorSchemeSeed: Colors.blue,
+      useMaterial3: true,
+      brightness: brightness,
+      fontFamily: _useBundledDesktopFont ? _desktopFontFamily : null,
+    );
+  }
 
   @override
   void initState() {
@@ -36,10 +50,9 @@ class _RemoteMessageAppState extends State<RemoteMessageApp> {
     return MaterialApp(
       title: 'RemoteMessage',
       themeMode: _themeMode,
-      theme: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true, brightness: Brightness.light),
-      darkTheme: ThemeData(colorSchemeSeed: Colors.blue, useMaterial3: true, brightness: Brightness.dark),
+      theme: _buildTheme(Brightness.light),
+      darkTheme: _buildTheme(Brightness.dark),
       home: MessageHomePage(settings: settings, onThemeChanged: _onThemeChanged),
     );
   }
 }
-

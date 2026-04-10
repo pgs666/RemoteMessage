@@ -48,6 +48,9 @@ jobs:
       - name: Configure client app identity
         run: python client/configure_client_app_identity.py client/flutter_client_build
 
+      - name: Configure desktop support
+        run: python client/configure_client_desktop_support.py client/flutter_client_build
+
       - name: Build Linux
         working-directory: client/flutter_client_build
         run: flutter build linux
@@ -93,6 +96,9 @@ jobs:
 
       - name: Configure client app identity
         run: python client/configure_client_app_identity.py client/flutter_client_build
+
+      - name: Configure desktop support
+        run: python client/configure_client_desktop_support.py client/flutter_client_build
 
       - name: Build Windows
         working-directory: client/flutter_client_build

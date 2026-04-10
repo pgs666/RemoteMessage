@@ -288,6 +288,7 @@ def configure_ios(app_dir: Path) -> None:
 
     data["CFBundleDisplayName"] = APP_NAME_EN
     data["CFBundleName"] = APP_NAME_EN
+    data.setdefault("NSContactsUsageDescription", "Use contacts to display names for phone numbers.")
     data.setdefault("NSCameraUsageDescription", "Use camera to scan onboarding QR code.")
     data.setdefault("NSPhotoLibraryUsageDescription", "Select QR code image for onboarding.")
     data.setdefault("NSPhotoLibraryAddUsageDescription", "Save exported files when needed.")
@@ -346,4 +347,3 @@ def ns(name: str) -> str:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

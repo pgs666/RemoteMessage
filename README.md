@@ -647,10 +647,13 @@ cp -r ../flutter_client_source/lib/src lib/src
 # 4. 配置应用身份 (包名/显示名/图标)
 python ../configure_client_app_identity.py .
 
-# 5. 应用图标
+# 5. 配置桌面版额外资源（Linux / Windows / macOS 字体）
+python ../configure_client_desktop_support.py .
+
+# 6. 应用图标
 python ../apply_client_icons.py . ../icons
 
-# 6. 构建目标平台
+# 7. 构建目标平台
 flutter build linux       # Linux
 flutter build windows     # Windows
 flutter build apk         # Android
