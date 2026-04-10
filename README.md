@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="https://raw.githubusercontent.com/pgs666/RemoteMessage/main/client/icons/Icon12-iOS-Default-1024x1024%401x.png" alt="RemoteMessage icon" width="160" />
+</p>
+
 # RemoteMessage
 
 RemoteMessage 是一个完整的三端协作远程短信系统，允许你通过 Android 手机作为网关，在任何设备上收发短信。
