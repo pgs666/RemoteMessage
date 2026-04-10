@@ -12,6 +12,9 @@ import 'compose_message_page.dart';
 import 'settings_page.dart';
 
 enum _ChatMessageAction { delete }
+class _SendMessageIntent extends Intent {
+  const _SendMessageIntent();
+}
 
 class MessageHomePage extends StatefulWidget {
   final AppSettingsStore settings;
@@ -749,42 +752,46 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
             itemBuilder: (context, index) {
               final c = data[index];
               final selected = c.phone == _activePhone;
-              return ListTile(
-                selected: selected,
-                leading: c.pinned ? const Icon(Icons.push_pin, size: 18) : null,
-                title: Text(_displayConversationTitle(c.phone), maxLines: 1, overflow: TextOverflow.ellipsis),
-                subtitle: Text(
-                  (() {
-                    final simLabel = _simLabelForMessage(c.lastMessage);
-                    final statusLabel = _messageStatusPrefix(c.lastMessage);
-                    final parts = <String>[
-                      if (simLabel != null) simLabel,
-                      if (statusLabel != null) statusLabel,
-                      c.lastMessage.content,
-                    ];
-                    return parts.join(' | ');
-                  })(),
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                ),
-                onTap: () async {
-                  await _setActivePhone(c.phone);
-                  if (openChatOnTap && context.mounted) {
-                    await Navigator.push(
-                      context,
-                      MaterialPageRoute(builder: (_) => MobileChatPage(parent: this, phone: c.phone)),
-                    );
-                  }
-                },
-                onLongPress: () => _showConversationActions(c),
-                trailing: SizedBox(
-                  width: 90,
-                  child: Text(
-                    _formatConversationTimestamp(c.lastMessage.timestamp),
+              return GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onSecondaryTap: () => _showConversationActions(c),
+                child: ListTile(
+                  selected: selected,
+                  leading: c.pinned ? const Icon(Icons.push_pin, size: 18) : null,
+                  title: Text(_displayConversationTitle(c.phone), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  subtitle: Text(
+                    (() {
+                      final simLabel = _simLabelForMessage(c.lastMessage);
+                      final statusLabel = _messageStatusPrefix(c.lastMessage);
+                      final parts = <String>[
+                        if (simLabel != null) simLabel,
+                        if (statusLabel != null) statusLabel,
+                        c.lastMessage.content,
+                      ];
+                      return parts.join(' | ');
+                    })(),
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    textAlign: TextAlign.end,
-                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                  onTap: () async {
+                    await _setActivePhone(c.phone);
+                    if (openChatOnTap && context.mounted) {
+                      await Navigator.push(
+                        context,
+                        MaterialPageRoute(builder: (_) => MobileChatPage(parent: this, phone: c.phone)),
+                      );
+                    }
+                  },
+                  onLongPress: () => _showConversationActions(c),
+                  trailing: SizedBox(
+                    width: 90,
+                    child: Text(
+                      _formatConversationTimestamp(c.lastMessage.timestamp),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      textAlign: TextAlign.end,
+                      style: Theme.of(context).textTheme.bodySmall,
+                    ),
                   ),
                 ),
               );
@@ -880,6 +887,7 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                     alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
                     child: GestureDetector(
                       onLongPress: () => _showMessageActions(m),
+                      onSecondaryTap: () => _showMessageActions(m),
                       child: Container(
                         margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                         padding: const EdgeInsets.all(10),
@@ -1071,6 +1079,7 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     return Shortcuts(
       shortcuts: <ShortcutActivator, Intent>{
         const SingleActivator(LogicalKeyboardKey.keyN, control: true): const ActivateIntent(),
+        const SingleActivator(LogicalKeyboardKey.enter, control: true): const _SendMessageIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -1078,6 +1087,14 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
             onInvoke: (_) {
               if (!isMobileScreen && !_loading) {
                 _openComposePage();
+              }
+              return null;
+            },
+          ),
+          _SendMessageIntent: CallbackAction<_SendMessageIntent>(
+            onInvoke: (_) {
+              if (!isMobileScreen && !_loading && _composerFocusNode.hasFocus) {
+                unawaited(_sendSmsToActive());
               }
               return null;
             },

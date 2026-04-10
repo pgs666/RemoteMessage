@@ -1,4 +1,5 @@
 ﻿import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import 'app_data.dart';
 
@@ -8,6 +9,10 @@ class ComposeDraft {
   final int? simSlotIndex;
 
   const ComposeDraft({required this.phone, required this.message, this.simSlotIndex});
+}
+
+class _SubmitComposeIntent extends Intent {
+  const _SubmitComposeIntent();
 }
 
 class ComposeMessagePage extends StatefulWidget {
@@ -29,6 +34,7 @@ class ComposeMessagePage extends StatefulWidget {
 class _ComposeMessagePageState extends State<ComposeMessagePage> {
   final _phoneCtrl = TextEditingController();
   final _messageCtrl = TextEditingController();
+  final _messageFocusNode = FocusNode();
   final _previewScrollCtrl = ScrollController();
   int? _simSlot;
 
@@ -47,6 +53,7 @@ class _ComposeMessagePageState extends State<ComposeMessagePage> {
     _phoneCtrl.dispose();
     _messageCtrl.removeListener(_scrollPreviewToEnd);
     _messageCtrl.dispose();
+    _messageFocusNode.dispose();
     _previewScrollCtrl.dispose();
     super.dispose();
   }
@@ -136,82 +143,99 @@ class _ComposeMessagePageState extends State<ComposeMessagePage> {
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      resizeToAvoidBottomInset: true,
-      appBar: AppBar(title: Text(tr('新短信', 'New SMS'))),
-      body: Column(
-        children: [
-          Padding(
-            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
-            child: TextField(
-              controller: _phoneCtrl,
-              keyboardType: TextInputType.phone,
-              decoration: _pillDecoration(tr('号码', 'Phone'), isLabel: true),
-            ),
+    return Shortcuts(
+      shortcuts: const <ShortcutActivator, Intent>{
+        SingleActivator(LogicalKeyboardKey.enter, control: true): _SubmitComposeIntent(),
+      },
+      child: Actions(
+        actions: <Type, Action<Intent>>{
+          _SubmitComposeIntent: CallbackAction<_SubmitComposeIntent>(
+            onInvoke: (_) {
+              if (_messageFocusNode.hasFocus) {
+                _submit();
+              }
+              return null;
+            },
           ),
-          Expanded(
-            child: Container(
-              color: Theme.of(context).colorScheme.surfaceContainerLowest,
-              child: ListView(
-                controller: _previewScrollCtrl,
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                children: [
-                  if (_messageCtrl.text.trim().isEmpty)
-                    Padding(
-                      padding: const EdgeInsets.only(top: 12),
-                      child: Text(
-                        tr('在下方输入短信内容，发送前可预览气泡样式。', 'Type your message below to preview the bubble before sending.'),
-                        style: Theme.of(context).textTheme.bodySmall,
-                      ),
-                    )
-                  else
-                    Align(
-                      alignment: Alignment.centerRight,
-                      child: Container(
-                        constraints: const BoxConstraints(maxWidth: 420),
-                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-                        decoration: BoxDecoration(
-                          color: Theme.of(context).colorScheme.primaryContainer,
-                          borderRadius: BorderRadius.circular(18),
+        },
+        child: Scaffold(
+          resizeToAvoidBottomInset: true,
+          appBar: AppBar(title: Text(tr('新短信', 'New SMS'))),
+          body: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+                child: TextField(
+                  controller: _phoneCtrl,
+                  keyboardType: TextInputType.phone,
+                  decoration: _pillDecoration(tr('号码', 'Phone'), isLabel: true),
+                ),
+              ),
+              Expanded(
+                child: Container(
+                  color: Theme.of(context).colorScheme.surfaceContainerLowest,
+                  child: ListView(
+                    controller: _previewScrollCtrl,
+                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                    children: [
+                      if (_messageCtrl.text.trim().isEmpty)
+                        Padding(
+                          padding: const EdgeInsets.only(top: 12),
+                          child: Text(
+                            tr('在下方输入短信内容，发送前可预览气泡样式。', 'Type your message below to preview the bubble before sending.'),
+                            style: Theme.of(context).textTheme.bodySmall,
+                          ),
+                        )
+                      else
+                        Align(
+                          alignment: Alignment.centerRight,
+                          child: Container(
+                            constraints: const BoxConstraints(maxWidth: 420),
+                            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                            decoration: BoxDecoration(
+                              color: Theme.of(context).colorScheme.primaryContainer,
+                              borderRadius: BorderRadius.circular(18),
+                            ),
+                            child: Text(_messageCtrl.text.trim()),
+                          ),
                         ),
-                        child: Text(_messageCtrl.text.trim()),
-                      ),
-                    ),
-                ],
-              ),
-            ),
-          ),
-          SafeArea(
-            top: false,
-            child: Padding(
-              padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: TextField(
-                      controller: _messageCtrl,
-                      minLines: 1,
-                      maxLines: 4,
-                      decoration: _pillDecoration(
-                        tr('输入消息...', 'Type a message...'),
-                        suffixIcon: _showSimSelection ? _buildSimSelector() : null,
-                        suffixIconConstraints: const BoxConstraints(minWidth: 72, maxWidth: 140),
-                      ),
-                    ),
+                    ],
                   ),
-                  const SizedBox(width: 8),
-                  FilledButton(
-                    onPressed: _submit,
-                    style: FilledButton.styleFrom(shape: const CircleBorder(), padding: const EdgeInsets.all(14)),
-                    child: const Icon(Icons.send),
-                  ),
-                ],
+                ),
               ),
-            ),
+              SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(8, 8, 8, 12),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: TextField(
+                          controller: _messageCtrl,
+                          focusNode: _messageFocusNode,
+                          minLines: 1,
+                          maxLines: 4,
+                          decoration: _pillDecoration(
+                            tr('输入消息...', 'Type a message...'),
+                            suffixIcon: _showSimSelection ? _buildSimSelector() : null,
+                            suffixIconConstraints: const BoxConstraints(minWidth: 72, maxWidth: 140),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton(
+                        onPressed: _submit,
+                        style: FilledButton.styleFrom(shape: const CircleBorder(), padding: const EdgeInsets.all(14)),
+                        child: const Icon(Icons.send),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
           ),
-        ],
+        ),
       ),
     );
   }
 }
-
