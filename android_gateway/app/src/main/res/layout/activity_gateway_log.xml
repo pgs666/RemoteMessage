@@ -1,88 +1,178 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/rootLayout"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/rmg_background">
 
-    <LinearLayout
+    <com.google.android.material.appbar.AppBarLayout
+        android:id="@+id/appBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="16dp">
+        android:background="@color/rmg_surface_card"
+        android:elevation="0dp"
+        android:stateListAnimator="@null"
+        app:elevation="0dp">
 
-        <Switch
-            android:id="@+id/switchEnableLog"
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
             android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/label_enable_log" />
+            android:layout_height="?attr/actionBarSize"
+            android:background="@color/rmg_surface_card"
+            android:elevation="0dp"
+            app:navigationIcon="?attr/homeAsUpIndicator"
+            app:title="@string/title_log_page"
+            app:titleTextColor="@color/rmg_on_surface" />
+    </com.google.android.material.appbar.AppBarLayout>
 
-        <Switch
-            android:id="@+id/switchAutoClearLog"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/label_auto_clear_log" />
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/logScroll"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/rmg_background"
+        android:clipToPadding="false"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal">
-
-            <EditText
-                android:id="@+id/editAutoClearMinutes"
-                android:layout_width="0dp"
+            android:orientation="vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="24dp">
+            <TextView
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:hint="@string/hint_auto_clear_minutes"
-                android:inputType="number" />
+                android:layout_marginHorizontal="4dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="6dp"
+                android:text="@string/section_log_controls"
+                android:textAppearance="@style/TextAppearance.RemoteMessage.SectionLabel" />
 
-            <Button
+            <com.google.android.material.card.MaterialCardView
+                style="?attr/rmgCardFilledStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical"
+                    android:padding="16dp">
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switchEnableLog"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="52dp"
+                        android:text="@string/label_enable_log"
+                        android:textColor="@color/rmg_on_surface" />
+
+                    <View
+                        android:layout_width="match_parent"
+                        android:layout_height="1dp"
+                        android:layout_marginVertical="8dp"
+                        android:background="@color/rmg_outline_soft" />
+
+                    <com.google.android.material.switchmaterial.SwitchMaterial
+                        android:id="@+id/switchAutoClearLog"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:minHeight="52dp"
+                        android:text="@string/label_auto_clear_log"
+                        android:textColor="@color/rmg_on_surface" />
+
+                    <com.google.android.material.textfield.TextInputLayout
+                        style="?attr/rmgTextInputStyle"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="10dp"
+                        android:hint="@string/hint_auto_clear_minutes">
+
+                        <com.google.android.material.textfield.TextInputEditText
+                            android:id="@+id/editAutoClearMinutes"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:inputType="number" />
+                    </com.google.android.material.textfield.TextInputLayout>
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
                 android:id="@+id/btnSaveAutoClear"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:text="@string/btn_save_auto_clear" />
-        </LinearLayout>
+                android:layout_marginVertical="2dp"
+                app:icon="@drawable/ic_check_circle"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/hint_auto_clear_minutes"
+                app:text="@string/btn_save_auto_clear" />
 
-        <LinearLayout
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:orientation="horizontal">
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_marginTop="14dp"
+                android:layout_marginBottom="6dp"
+                android:text="@string/section_log_actions"
+                android:textAppearance="@style/TextAppearance.RemoteMessage.SectionLabel" />
 
-            <Button
+            <cn.ac.studio.rmg.ui.LargeActionLabel
                 android:id="@+id/btnPauseLogRefresh"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_pause_log_refresh" />
+                android:layout_marginVertical="2dp"
+                app:icon="@drawable/ic_sync"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/section_log_output"
+                app:text="@string/btn_pause_log_refresh" />
 
-            <Button
+            <cn.ac.studio.rmg.ui.LargeActionLabel
                 android:id="@+id/btnCopyLog"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:text="@string/btn_copy_log" />
+                android:layout_marginVertical="2dp"
+                app:icon="@drawable/ic_logs"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/status_log_copied"
+                app:text="@string/btn_copy_log" />
 
-            <Button
+            <cn.ac.studio.rmg.ui.LargeActionLabel
                 android:id="@+id/btnClearLogNow"
-                android:layout_width="0dp"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="8dp"
-                android:layout_weight="1"
-                android:text="@string/btn_clear_log_now" />
+                android:layout_marginVertical="2dp"
+                app:icon="@drawable/ic_info"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/status_debug_log_cleared"
+                app:text="@string/btn_clear_log_now" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_marginTop="14dp"
+                android:layout_marginBottom="8dp"
+                android:text="@string/section_log_output"
+                android:textAppearance="@style/TextAppearance.RemoteMessage.SectionLabel" />
+
+            <com.google.android.material.card.MaterialCardView
+                style="?attr/rmgCardOutlinedStyle"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <TextView
+                    android:id="@+id/textLogContent"
+                    android:layout_width="match_parent"
+                    android:layout_height="420dp"
+                    android:fontFamily="monospace"
+                    android:padding="12dp"
+                    android:text="@string/status_debug_log_empty"
+                    android:textAppearance="@style/TextAppearance.RemoteMessage.Body"
+                    android:textIsSelectable="true" />
+            </com.google.android.material.card.MaterialCardView>
         </LinearLayout>
-
-        <TextView
-            android:id="@+id/textLogContent"
-            android:layout_width="match_parent"
-            android:layout_height="560dp"
-            android:layout_marginTop="12dp"
-            android:background="#11000000"
-            android:padding="8dp"
-            android:text="@string/status_debug_log_empty"
-            android:textIsSelectable="true" />
-    </LinearLayout>
-
-</ScrollView>
+    </androidx.core.widget.NestedScrollView>
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

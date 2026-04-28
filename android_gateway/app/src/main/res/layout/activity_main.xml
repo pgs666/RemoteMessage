@@ -1,149 +1,107 @@
 <?xml version="1.0" encoding="utf-8"?>
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<androidx.core.widget.NestedScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/rootScroll"
     android:layout_width="match_parent"
-    android:layout_height="match_parent">
+    android:layout_height="match_parent"
+    android:background="@color/rmg_background"
+    android:clipToPadding="false"
+    android:scrollbars="none">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
+        android:clipToPadding="false"
         android:orientation="vertical"
-        android:padding="16dp">
-
-        <EditText
-            android:id="@+id/editServer"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:hint="@string/hint_server_base_url" />
-
-        <EditText
-            android:id="@+id/editDeviceId"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:hint="@string/hint_device_id" />
-
-        <EditText
-            android:id="@+id/editApiKey"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:hint="@string/hint_password"
-            android:inputType="textPassword" />
-
-        <Button
-            android:id="@+id/btnScanOnboarding"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/btn_scan_onboarding_qr" />
-
-        <EditText
-            android:id="@+id/editWebUiPort"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:hint="@string/hint_webui_port"
-            android:inputType="number" />
+        android:paddingHorizontal="@dimen/main_padding_horizontal"
+        android:paddingTop="12dp"
+        android:paddingBottom="32dp">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
+            android:gravity="center_vertical"
+            android:minHeight="@dimen/main_top_banner_height"
             android:orientation="horizontal">
 
-            <Button
-                android:id="@+id/btnSave"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_save" />
+            <FrameLayout
+                android:layout_width="@dimen/large_item_header_layout_size"
+                android:layout_height="@dimen/large_item_header_layout_size">
 
-            <Button
-                android:id="@+id/btnRegister"
-                android:layout_width="0dp"
-                android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_register" />
+                <ImageView
+                    android:layout_width="@dimen/main_logo_size"
+                    android:layout_height="@dimen/main_logo_size"
+                    android:layout_gravity="center"
+                    android:contentDescription="@string/app_name"
+                    android:scaleType="fitCenter"
+                    android:src="@drawable/app_icon" />
+            </FrameLayout>
 
-            <Button
-                android:id="@+id/btnPollOnce"
-                android:layout_width="0dp"
+            <TextView
+                android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:layout_weight="1"
-                android:text="@string/btn_poll_once" />
+                android:text="@string/header_app_name"
+                android:textAppearance="@style/TextAppearance.MaterialComponents.Headline6"
+                android:textColor="@color/rmg_header_text" />
         </LinearLayout>
 
-        <Button
-            android:id="@+id/btnSyncHistory"
+        <cn.ac.studio.rmg.ui.LargeActionCard
+            android:id="@+id/btnPollOnce"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/btn_sync_history" />
+            android:layout_marginVertical="@dimen/main_card_margin_vertical"
+            android:theme="@style/ThemeOverlay.RemoteMessage.ActionCardDark"
+            app:cardBackgroundColor="@color/rmg_clash_blue"
+            app:icon="@drawable/ic_check_circle"
+            app:iconTint="@android:color/white"
+            app:subtext="@string/status_ready"
+            app:text="@string/status_running" />
 
-        <Button
-            android:id="@+id/btnTestLocalSms"
+        <com.google.android.material.progressindicator.LinearProgressIndicator
+            android:id="@+id/progressSync"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/btn_test_local_sms" />
+            android:layout_marginVertical="@dimen/main_card_margin_vertical"
+            android:visibility="gone"
+            app:indicatorColor="@color/rmg_clash_blue"
+            app:trackColor="@color/rmg_primary_light" />
 
-        <Button
-            android:id="@+id/btnFlushPending"
+        <cn.ac.studio.rmg.ui.LargeActionCard
+            android:id="@+id/btnSave"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/btn_flush_pending" />
+            android:layout_marginVertical="@dimen/main_card_margin_vertical"
+            app:icon="@drawable/ic_grid"
+            app:iconTint="@color/rmg_icon"
+            app:subtext="@string/summary_connection_unconfigured"
+            app:text="@string/title_connection_settings" />
 
-        <Button
-            android:id="@+id/btnImportCert"
+        <cn.ac.studio.rmg.ui.LargeActionCard
+            android:id="@+id/btnRegister"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/btn_import_cert" />
+            android:layout_marginVertical="@dimen/main_card_margin_vertical"
+            app:icon="@drawable/ic_list"
+            app:iconTint="@color/rmg_icon"
+            app:subtext="@string/summary_gateway_unregistered"
+            app:text="@string/title_gateway_card" />
 
-        <Button
-            android:id="@+id/btnPermissionTools"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/btn_permission_tools" />
-
-        <Button
+        <cn.ac.studio.rmg.ui.LargeActionLabel
             android:id="@+id/btnOpenLogPage"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/btn_open_log_page" />
+            android:layout_marginVertical="@dimen/main_label_margin_vertical"
+            app:icon="@drawable/ic_logs"
+            app:iconTint="@color/rmg_icon"
+            app:text="@string/title_logs_entry" />
 
-        <Button
-            android:id="@+id/btnGatewayDataTools"
+        <cn.ac.studio.rmg.ui.LargeActionLabel
+            android:id="@+id/btnPermissionTools"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="@string/btn_gateway_data_tools" />
-
-        <ProgressBar
-            android:id="@+id/progressSync"
-            style="?android:attr/progressBarStyleHorizontal"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:max="100"
-            android:visibility="gone" />
-
-        <TextView
-            android:id="@+id/textSimInfo"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/status_sim_info_empty" />
-
-        <TextView
-            android:id="@+id/textStatus"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="12dp"
-            android:text="@string/status_ready" />
+            android:layout_marginVertical="@dimen/main_label_margin_vertical"
+            app:icon="@drawable/ic_settings"
+            app:iconTint="@color/rmg_icon"
+            app:text="@string/title_settings" />
     </LinearLayout>
-
-</ScrollView>
+</androidx.core.widget.NestedScrollView>
