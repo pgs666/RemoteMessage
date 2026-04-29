@@ -156,7 +156,7 @@ RemoteMessage/
 - **消息去重**：自动过滤重复短信
 - **会话置顶**：客户端置顶会话持久化
 - **API日志**：所有接口访问记录入库
-- **Release 二进制**：Linux x64 / Windows x64 可执行程序
+- **Release 二进制**：Linux x64 / Linux ARM64 / Windows x64 / Windows ARM64 可执行程序
 - **内置SQLite**：原生库打包进单文件，无需额外部署
 - **令牌鉴权**：分段令牌机制 (X-Gateway-Token / X-Client-Token / X-Admin-Token)
 - **维护策略**：可配置的日志轮转、数据保留、数据库大小限制
@@ -183,7 +183,9 @@ RemoteMessage/
 从 [GitHub Releases](https://github.com/pgs666/RemoteMessage/releases) 下载对应平台的单文件可执行程序：
 
 - **Linux x64**：`RemoteMessageServer-linux-x64`
+- **Linux ARM64**（树莓派等）：`RemoteMessageServer-linux-arm64`
 - **Windows x64**：`RemoteMessageServer-windows-x64`
+- **Windows ARM64**：`RemoteMessageServer-windows-arm64.exe`
 
 #### 1.2 解压并运行
 
@@ -689,7 +691,7 @@ cargo build --release --manifest-path middle_server_rust/Cargo.toml
 |----------|----------|----------|
 | **flutter-client.yml** | push / PR | Linux / Windows / Android (signed APK) / iOS (no-codesign app + unsigned IPA) |
 | **android-gateway.yml** | push / PR | Android Debug APK |
-| **middle-server.yml** | push / PR | Linux x64 / Windows x64 可执行程序 |
+| **middle-server.yml** | push / PR | Linux x64 / Linux ARM64 / Windows x64 / Windows ARM64 可执行程序 |
 
 **签名密钥**：Android构建通过GitHub Secrets配置签名，CI自动解码keystore并完成签名。
 

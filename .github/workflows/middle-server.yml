@@ -13,10 +13,20 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
             output_id: linux-x64
             exe_suffix: ""
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            output_id: linux-arm64
+            exe_suffix: ""
           - os: windows-latest
+            target: x86_64-pc-windows-msvc
             output_id: windows-x64
+            exe_suffix: ".exe"
+          - os: windows-latest
+            target: aarch64-pc-windows-msvc
+            output_id: windows-arm64
             exe_suffix: ".exe"
 
     steps:
@@ -25,21 +35,33 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux ARM64 cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
 
       - name: Build (${{ matrix.output_id }})
-        run: cargo build --release --manifest-path middle_server_rust/Cargo.toml
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+          CC_aarch64_unknown_linux_gnu: aarch64-linux-gnu-gcc
+          AR_aarch64_unknown_linux_gnu: aarch64-linux-gnu-ar
+        run: cargo build --release --manifest-path middle_server_rust/Cargo.toml --target ${{ matrix.target }}
 
       - name: Normalize output (${{ matrix.output_id }})
         shell: bash
         run: |
           set -euo pipefail
           out_dir="artifacts/middle-server/${{ matrix.output_id }}"
-          source_file="middle_server_rust/target/release/remote_message_middle_server${{ matrix.exe_suffix }}"
+          source_file="middle_server_rust/target/${{ matrix.target }}/release/remote_message_middle_server${{ matrix.exe_suffix }}"
           target_file="$out_dir/RemoteMessageServer-${{ matrix.output_id }}${{ matrix.exe_suffix }}"
 
           if [[ ! -f "$source_file" ]]; then
             echo "::error::Expected build binary not found: $source_file"
-            ls -la "middle_server_rust/target/release" || true
+            ls -la "middle_server_rust/target/${{ matrix.target }}/release" || true
             exit 1
           fi
 
