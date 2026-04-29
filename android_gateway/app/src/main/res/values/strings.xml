@@ -143,6 +143,8 @@
     <string name="summary_clear_gateway_database">Delete local pending uploads and reset sync cursor</string>
     <string name="summary_clear_server_database">Delete remote messages, queues, SIM profiles, PINs, and API logs</string>
     <string name="summary_open_logs">View gateway debug output and log controls</string>
+    <string name="error_sms_not_supported">This device does not support SMS sending. Use a real phone with SMS capability as the gateway.</string>
+    <string name="error_sms_send_failed">SMS send failed: %1$s</string>
 
     <plurals name="summary_forwarded_count">
         <item quantity="one">%1$d message forwarded</item>

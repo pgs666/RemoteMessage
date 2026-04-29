@@ -3,7 +3,7 @@ use std::{sync::Arc, time::Instant};
 use axum::{
     Json, Router,
     body::Body,
-    extract::{DefaultBodyLimit, Path, Query, State},
+    extract::{DefaultBodyLimit, Extension, Path, Query, State},
     http::{Request, StatusCode},
     middleware::{self, Next},
     response::{IntoResponse, Response},
@@ -18,12 +18,13 @@ use crate::{
     crypto::{CryptoState, build_message_identity, encrypt_by_public_key},
     logger::FileLogger,
     models::{
-        AckOutboundRequest, ClearServerDataRequest, GatewaySmsPayload, OutboundInstruction,
-        OutboundStatusUpdateRequest, PinConversationRequest, RegisterGatewayRequest,
-        SendSmsRequest, SmsPayload, UploadSmsRequest, UpsertGatewaySimStateRequest,
+        AckOutboundRequest, ClearServerDataRequest, GatewayRegistrationResult, GatewaySmsPayload,
+        OutboundInstruction, OutboundStatusUpdateRequest, PinConversationRequest,
+        RegisterGatewayRequest, SendSmsRequest, SmsPayload, UploadSmsRequest,
+        UpsertGatewaySimStateRequest,
     },
     registry::GatewayRegistry,
-    repository::SqliteRepository,
+    repository::{AUTH_ROLE_CLIENT, AUTH_ROLE_GATEWAY, SqliteRepository},
     runtime::now_millis,
 };
 
@@ -36,6 +37,16 @@ pub struct AppState {
     pub repo: SqliteRepository,
     pub registry: GatewayRegistry,
     pub logger: FileLogger,
+}
+
+#[derive(Clone, Debug)]
+enum AuthContext {
+    Admin,
+    Client,
+    Gateway {
+        credential_id: String,
+        bound_device_id: Option<String>,
+    },
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -64,13 +75,18 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-async fn auth_and_log(State(state): State<AppState>, req: Request<Body>, next: Next) -> Response {
+async fn auth_and_log(
+    State(state): State<AppState>,
+    mut req: Request<Body>,
+    next: Next,
+) -> Response {
     let begin = Instant::now();
     let method = req.method().as_str().to_owned();
     let path = req.uri().path().to_owned();
     let remote_ip = "unknown".to_owned();
 
-    if !path.eq_ignore_ascii_case("/healthz") && !is_request_authorized(&req, &state.settings) {
+    let auth = authorize_request(&state, &req);
+    if !path.eq_ignore_ascii_case("/healthz") && auth.is_none() {
         let response = (
             StatusCode::UNAUTHORIZED,
             Json(json!({ "error": "invalid credentials" })),
@@ -85,6 +101,9 @@ async fn auth_and_log(State(state): State<AppState>, req: Request<Body>, next: N
         );
         return response;
     }
+    if let Some(auth) = auth {
+        req.extensions_mut().insert(auth);
+    }
 
     let response = next.run(req).await;
     state.repo.insert_api_log(
@@ -97,24 +116,62 @@ async fn auth_and_log(State(state): State<AppState>, req: Request<Body>, next: N
     response
 }
 
-fn is_request_authorized(req: &Request<Body>, settings: &ServerRuntimeSettings) -> bool {
+fn authorize_request(state: &AppState, req: &Request<Body>) -> Option<AuthContext> {
     let path = req.uri().path();
     let headers = req.headers();
     if starts_with_ignore_ascii_case(path, "/api/gateway/") {
-        return header_matches(headers, "X-Gateway-Token", &settings.gateway_token);
+        return authenticate_credential_header(
+            state,
+            headers,
+            "X-Gateway-Token",
+            AUTH_ROLE_GATEWAY,
+        );
     }
     if starts_with_ignore_ascii_case(path, "/api/client/") {
-        return header_matches(headers, "X-Client-Token", &settings.client_token);
+        return authenticate_credential_header(state, headers, "X-Client-Token", AUTH_ROLE_CLIENT);
     }
     if starts_with_ignore_ascii_case(path, "/api/admin/") {
-        return header_matches(headers, "X-Admin-Token", &settings.admin_token);
+        return header_matches(headers, "X-Admin-Token", &state.settings.admin_token)
+            .then_some(AuthContext::Admin);
     }
     if starts_with_ignore_ascii_case(path, "/api/crypto/") {
-        return header_matches(headers, "X-Gateway-Token", &settings.gateway_token)
-            || header_matches(headers, "X-Client-Token", &settings.client_token)
-            || header_matches(headers, "X-Admin-Token", &settings.admin_token);
+        return authenticate_credential_header(
+            state,
+            headers,
+            "X-Gateway-Token",
+            AUTH_ROLE_GATEWAY,
+        )
+        .or_else(|| {
+            authenticate_credential_header(state, headers, "X-Client-Token", AUTH_ROLE_CLIENT)
+        })
+        .or_else(|| {
+            header_matches(headers, "X-Admin-Token", &state.settings.admin_token)
+                .then_some(AuthContext::Admin)
+        });
     }
-    false
+    None
+}
+
+fn authenticate_credential_header(
+    state: &AppState,
+    headers: &axum::http::HeaderMap,
+    header_name: &str,
+    role: &str,
+) -> Option<AuthContext> {
+    let provided = headers.get(header_name)?.to_str().ok()?.trim();
+    let credential = state
+        .repo
+        .authenticate_auth_token(role, provided)
+        .ok()
+        .flatten()?;
+    match credential.role.as_str() {
+        AUTH_ROLE_CLIENT => Some(AuthContext::Client),
+        AUTH_ROLE_GATEWAY => Some(AuthContext::Gateway {
+            credential_id: credential.id,
+            bound_device_id: credential.bound_device_id,
+        }),
+        _ => None,
+    }
 }
 
 fn header_matches(headers: &axum::http::HeaderMap, header_name: &str, expected: &str) -> bool {
@@ -138,25 +195,49 @@ async fn server_public_key(State(state): State<AppState>) -> Json<serde_json::Va
 }
 
 async fn register_gateway(
+    Extension(auth): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(req): Json<RegisterGatewayRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     validate_register_gateway_request(&req)?;
-    state
-        .registry
-        .upsert(req.device_id.clone(), req.public_key_pem.clone());
-    state
+    let AuthContext::Gateway { credential_id, .. } = auth else {
+        return Err(ApiError::forbidden("gateway credential required"));
+    };
+    let result = state
         .repo
-        .upsert_gateway(&req.device_id, &req.public_key_pem)
+        .register_gateway_with_credential(&credential_id, &req.device_id, &req.public_key_pem)
         .map_err(ApiError::internal)?;
-    Ok(Json(json!({ "ok": true, "deviceId": req.device_id })))
+    match result {
+        GatewayRegistrationResult::Created
+        | GatewayRegistrationResult::AlreadyRegistered
+        | GatewayRegistrationResult::PublicKeyUpdated => {
+            state
+                .registry
+                .upsert(req.device_id.clone(), req.public_key_pem.clone());
+            Ok(Json(json!({ "ok": true, "deviceId": req.device_id })))
+        }
+        GatewayRegistrationResult::PublicKeyConflict => Err(ApiError::conflict(
+            "gateway public key already registered for this deviceId",
+        )),
+        GatewayRegistrationResult::DeviceAlreadyRegistered => Err(ApiError::conflict(
+            "deviceId is already registered; use the original gateway token",
+        )),
+        GatewayRegistrationResult::CredentialNotFound => Err(ApiError::forbidden(
+            "gateway credential is no longer active",
+        )),
+        GatewayRegistrationResult::CredentialDeviceConflict => Err(ApiError::forbidden(
+            "gateway token is bound to a different deviceId",
+        )),
+    }
 }
 
 async fn upsert_gateway_sim_state(
+    Extension(auth): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(req): Json<UpsertGatewaySimStateRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     validate_gateway_sim_state_request(&req)?;
+    require_gateway_device(&auth, &req.device_id)?;
     state
         .repo
         .replace_gateway_sim_profiles(&req.device_id, &req.profiles)
@@ -169,10 +250,12 @@ async fn upsert_gateway_sim_state(
 }
 
 async fn upload_sms(
+    Extension(auth): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(req): Json<UploadSmsRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     validate_upload_sms_request(&req)?;
+    require_gateway_device(&auth, &req.device_id)?;
     state
         .repo
         .touch_gateway_last_seen(&req.device_id)
@@ -256,8 +339,10 @@ async fn upload_sms(
 #[serde(rename_all = "camelCase")]
 struct InboxQuery {
     since_ts: Option<i64>,
+    after_id: Option<String>,
     limit: Option<i32>,
     phone: Option<String>,
+    device_id: Option<String>,
 }
 
 async fn client_inbox(
@@ -271,9 +356,22 @@ async fn client_inbox(
     {
         return Err(ApiError::bad_request("phone invalid"));
     }
+    if query
+        .device_id
+        .as_deref()
+        .is_some_and(|device_id| device_id.trim().is_empty() || device_id.chars().count() > 128)
+    {
+        return Err(ApiError::bad_request("deviceId invalid"));
+    }
     let list = state
         .repo
-        .query_messages(query.since_ts, query.limit, query.phone)
+        .query_messages(
+            query.since_ts,
+            query.after_id,
+            query.limit,
+            query.phone,
+            query.device_id,
+        )
         .map_err(ApiError::internal)?;
     Ok(Json(list))
 }
@@ -463,12 +561,14 @@ struct GatewayPullQuery {
 }
 
 async fn pull_outbound(
+    Extension(auth): Extension<AuthContext>,
     State(state): State<AppState>,
     Query(query): Query<GatewayPullQuery>,
 ) -> Result<Response, ApiError> {
     if query.device_id.trim().is_empty() || query.device_id.chars().count() > 128 {
         return Err(ApiError::bad_request("deviceId required"));
     }
+    require_gateway_device(&auth, &query.device_id)?;
     state
         .repo
         .touch_gateway_last_seen(&query.device_id)
@@ -484,10 +584,12 @@ async fn pull_outbound(
 }
 
 async fn ack_outbound(
+    Extension(auth): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(req): Json<AckOutboundRequest>,
 ) -> Result<Response, ApiError> {
     validate_ack_outbound_request(&req)?;
+    require_gateway_device(&auth, &req.device_id)?;
     state
         .repo
         .touch_gateway_last_seen(&req.device_id)
@@ -508,10 +610,12 @@ async fn ack_outbound(
 }
 
 async fn outbound_status(
+    Extension(auth): Extension<AuthContext>,
     State(state): State<AppState>,
     Json(req): Json<OutboundStatusUpdateRequest>,
 ) -> Result<Json<serde_json::Value>, ApiError> {
     validate_outbound_status_request(&req)?;
+    require_gateway_device(&auth, &req.device_id)?;
     state
         .repo
         .touch_gateway_last_seen(&req.device_id)
@@ -593,6 +697,20 @@ impl ApiError {
         }
     }
 
+    fn forbidden(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::FORBIDDEN,
+            body: ErrorBody::Text(message.into()),
+        }
+    }
+
+    fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            body: ErrorBody::Text(message.into()),
+        }
+    }
+
     fn internal(error: impl std::fmt::Display) -> Self {
         Self {
             status: StatusCode::INTERNAL_SERVER_ERROR,
@@ -608,6 +726,29 @@ impl IntoResponse for ApiError {
             ErrorBody::Json(value) => (self.status, Json(value)).into_response(),
         }
     }
+}
+
+fn require_gateway_device(auth: &AuthContext, device_id: &str) -> Result<(), ApiError> {
+    let AuthContext::Gateway {
+        bound_device_id, ..
+    } = auth
+    else {
+        return Err(ApiError::forbidden("gateway credential required"));
+    };
+
+    if let Some(bound_device_id) = bound_device_id {
+        return if bound_device_id == device_id {
+            Ok(())
+        } else {
+            Err(ApiError::forbidden(
+                "gateway token is bound to a different deviceId",
+            ))
+        };
+    }
+
+    Err(ApiError::forbidden(
+        "gateway token is not bound; register gateway before using this endpoint",
+    ))
 }
 
 fn validate_register_gateway_request(req: &RegisterGatewayRequest) -> Result<(), ApiError> {

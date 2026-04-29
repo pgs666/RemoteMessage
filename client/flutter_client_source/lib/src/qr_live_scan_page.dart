@@ -1,19 +1,19 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 class QrLiveScanPage extends StatefulWidget {
   final bool isZh;
 
-  const QrLiveScanPage({
-    super.key,
-    required this.isZh,
-  });
+  const QrLiveScanPage({super.key, required this.isZh});
 
   @override
   State<QrLiveScanPage> createState() => _QrLiveScanPageState();
 }
 
 class _QrLiveScanPageState extends State<QrLiveScanPage> {
+  final MobileScannerController _controller = MobileScannerController();
   bool _handled = false;
 
   String tr(String zh, String en) => widget.isZh ? zh : en;
@@ -24,6 +24,7 @@ class _QrLiveScanPageState extends State<QrLiveScanPage> {
       final raw = barcode.rawValue?.trim() ?? '';
       if (raw.isNotEmpty) {
         _handled = true;
+        unawaited(_controller.stop());
         Navigator.of(context).pop(raw);
         return;
       }
@@ -31,26 +32,25 @@ class _QrLiveScanPageState extends State<QrLiveScanPage> {
   }
 
   @override
+  void dispose() {
+    unawaited(_controller.dispose());
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: Text(tr('扫码', 'Scan QR')),
-      ),
+      appBar: AppBar(title: Text(tr('扫码', 'Scan QR'))),
       body: Stack(
         children: [
-          MobileScanner(
-            onDetect: _onDetect,
-          ),
+          MobileScanner(controller: _controller, onDetect: _onDetect),
           Center(
             child: IgnorePointer(
               child: Container(
                 width: 240,
                 height: 240,
                 decoration: BoxDecoration(
-                  border: Border.all(
-                    color: Colors.white,
-                    width: 2,
-                  ),
+                  border: Border.all(color: Colors.white, width: 2),
                   borderRadius: BorderRadius.circular(20),
                 ),
               ),
@@ -62,7 +62,7 @@ class _QrLiveScanPageState extends State<QrLiveScanPage> {
             bottom: 24,
             child: DecoratedBox(
               decoration: BoxDecoration(
-                color: Colors.black.withOpacity(0.48),
+                color: Colors.black.withValues(alpha: 0.48),
                 borderRadius: BorderRadius.circular(12),
               ),
               child: Padding(

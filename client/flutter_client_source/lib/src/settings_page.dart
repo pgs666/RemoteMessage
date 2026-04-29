@@ -7,10 +7,7 @@ import 'app_data.dart';
 import 'onboarding_qr.dart';
 import 'qr_live_scan_page.dart';
 
-enum _OnboardingScanSource {
-  camera,
-  image,
-}
+enum _OnboardingScanSource { camera, image }
 
 class SettingsResult {
   final String serverBaseUrl;
@@ -58,7 +55,8 @@ class GatewayOnlineStatus {
       lastSeenAt: toInt(json['lastSeenAt']),
       isOnline: json['isOnline'] == true,
       onlineWindowMs: toInt(json['onlineWindowMs']) ?? 120000,
-      checkedAt: toInt(json['checkedAt']) ?? DateTime.now().millisecondsSinceEpoch,
+      checkedAt:
+          toInt(json['checkedAt']) ?? DateTime.now().millisecondsSinceEpoch,
     );
   }
 }
@@ -91,16 +89,25 @@ class _SettingsPageState extends State<SettingsPage> {
 
   String _certStatus = '';
   bool _certBusy = false;
+  bool _savingSettings = false;
   bool _gatewayStatusBusy = false;
+  int _gatewayStatusRequestId = 0;
   GatewayOnlineStatus? _gatewayOnlineStatus;
   String? _gatewayOnlineStatusError;
 
-  bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
+  bool get _isZh => WidgetsBinding
+      .instance
+      .platformDispatcher
+      .locale
+      .languageCode
+      .toLowerCase()
+      .startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
 
   String _appendIosCertificateHint(Object error) {
     final base = error.toString();
-    if (!Platform.isIOS || !AppSettingsStore.isLikelyTlsCertificateIssue(error)) {
+    if (!Platform.isIOS ||
+        !AppSettingsStore.isLikelyTlsCertificateIssue(error)) {
       return base;
     }
     return '$base\n${AppSettingsStore.iosSystemCertificateHint(isZh: _isZh)}';
@@ -121,7 +128,9 @@ class _SettingsPageState extends State<SettingsPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        content: Text(tr('扫码成功，已填充服务器和密码。', 'QR imported. Server and password filled.')),
+        content: Text(
+          tr('扫码成功，已填充服务器和密码。', 'QR imported. Server and password filled.'),
+        ),
       ),
     );
   }
@@ -139,7 +148,9 @@ class _SettingsPageState extends State<SettingsPage> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         behavior: SnackBarBehavior.floating,
-        content: Text(tr('扫码成功，已填充服务器和密码。', 'QR imported. Server and password filled.')),
+        content: Text(
+          tr('扫码成功，已填充服务器和密码。', 'QR imported. Server and password filled.'),
+        ),
       ),
     );
   }
@@ -156,12 +167,14 @@ class _SettingsPageState extends State<SettingsPage> {
               ListTile(
                 leading: const Icon(Icons.qr_code_scanner),
                 title: Text(tr('相机扫码', 'Scan with camera')),
-                onTap: () => Navigator.pop(sheetContext, _OnboardingScanSource.camera),
+                onTap: () =>
+                    Navigator.pop(sheetContext, _OnboardingScanSource.camera),
               ),
               ListTile(
                 leading: const Icon(Icons.image_search),
                 title: Text(tr('导入二维码截图', 'Import QR image')),
-                onTap: () => Navigator.pop(sheetContext, _OnboardingScanSource.image),
+                onTap: () =>
+                    Navigator.pop(sheetContext, _OnboardingScanSource.image),
               ),
               ListTile(
                 leading: const Icon(Icons.close),
@@ -203,9 +216,7 @@ class _SettingsPageState extends State<SettingsPage> {
   Future<OnboardingQrPayload?> _scanOnboardingFromCamera() async {
     if (!mounted) return null;
     final raw = await Navigator.of(context).push<String>(
-      MaterialPageRoute(
-        builder: (_) => QrLiveScanPage(isZh: _isZh),
-      ),
+      MaterialPageRoute(builder: (_) => QrLiveScanPage(isZh: _isZh)),
     );
     if (raw == null || raw.trim().isEmpty) {
       return null;
@@ -219,7 +230,13 @@ class _SettingsPageState extends State<SettingsPage> {
         XTypeGroup(
           label: 'image',
           extensions: ['png', 'jpg', 'jpeg', 'bmp', 'webp', 'gif'],
-          mimeTypes: ['image/png', 'image/jpeg', 'image/bmp', 'image/webp', 'image/gif'],
+          mimeTypes: [
+            'image/png',
+            'image/jpeg',
+            'image/bmp',
+            'image/webp',
+            'image/gif',
+          ],
           uniformTypeIdentifiers: ['public.image'],
         ),
       ],
@@ -280,7 +297,10 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   AppServerProfile _profileById(String id) {
-    return _profiles.firstWhere((p) => p.id == id, orElse: () => _profiles.first);
+    return _profiles.firstWhere(
+      (p) => p.id == id,
+      orElse: () => _profiles.first,
+    );
   }
 
   void _loadProfileIntoForm(String profileId) {
@@ -296,7 +316,9 @@ class _SettingsPageState extends State<SettingsPage> {
     if (idx < 0) return;
     final old = _profiles[idx];
     _profiles[idx] = old.copyWith(
-      name: _profileNameCtrl.text.trim().isEmpty ? tr('未命名配置', 'Unnamed Profile') : _profileNameCtrl.text.trim(),
+      name: _profileNameCtrl.text.trim().isEmpty
+          ? tr('未命名配置', 'Unnamed Profile')
+          : _profileNameCtrl.text.trim(),
       serverBaseUrl: _serverCtrl.text.trim(),
       deviceId: _deviceCtrl.text.trim(),
       password: _passwordCtrl.text.trim(),
@@ -320,85 +342,111 @@ class _SettingsPageState extends State<SettingsPage> {
     final deviceCtrl = TextEditingController(text: _deviceCtrl.text.trim());
     final passwordCtrl = TextEditingController(text: _passwordCtrl.text.trim());
 
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(tr('添加配置', 'Add Profile')),
-        content: SingleChildScrollView(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              TextField(
-                controller: nameCtrl,
-                decoration: InputDecoration(labelText: tr('配置名称', 'Profile Name')),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: serverCtrl,
-                decoration: InputDecoration(labelText: tr('服务器地址', 'Server Base URL')),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: deviceCtrl,
-                decoration: InputDecoration(labelText: tr('设备 ID', 'Device ID')),
-              ),
-              const SizedBox(height: 10),
-              TextField(
-                controller: passwordCtrl,
-                obscureText: true,
-                decoration: InputDecoration(labelText: tr('密码', 'Password')),
-              ),
-              const SizedBox(height: 10),
-              Align(
-                alignment: Alignment.center,
-                child: OutlinedButton.icon(
-                  onPressed: () => _scanOnboardingIntoControllers(
-                    serverController: serverCtrl,
-                    passwordController: passwordCtrl,
+    try {
+      final confirmed = await showDialog<bool>(
+        context: context,
+        builder: (context) => AlertDialog(
+          title: Text(tr('添加配置', 'Add Profile')),
+          content: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                TextField(
+                  controller: nameCtrl,
+                  decoration: InputDecoration(
+                    labelText: tr('配置名称', 'Profile Name'),
                   ),
-                  icon: const Icon(Icons.qr_code_scanner),
-                  label: Text(tr('扫码填充服务器与密码', 'Scan QR to fill server/password')),
                 ),
-              ),
-              const SizedBox(height: 6),
-              Align(
-                alignment: Alignment.centerLeft,
-                child: Text(
-                  tr('客户端设备 ID 需手动填写。', 'Client device ID must be entered manually.'),
-                  style: Theme.of(context).textTheme.bodySmall,
+                const SizedBox(height: 10),
+                TextField(
+                  controller: serverCtrl,
+                  decoration: InputDecoration(
+                    labelText: tr('服务器地址', 'Server Base URL'),
+                  ),
                 ),
-              ),
-            ],
+                const SizedBox(height: 10),
+                TextField(
+                  controller: deviceCtrl,
+                  decoration: InputDecoration(
+                    labelText: tr('设备 ID', 'Device ID'),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: passwordCtrl,
+                  obscureText: true,
+                  decoration: InputDecoration(labelText: tr('密码', 'Password')),
+                ),
+                const SizedBox(height: 10),
+                Align(
+                  alignment: Alignment.center,
+                  child: OutlinedButton.icon(
+                    onPressed: () => _scanOnboardingIntoControllers(
+                      serverController: serverCtrl,
+                      passwordController: passwordCtrl,
+                    ),
+                    icon: const Icon(Icons.qr_code_scanner),
+                    label: Text(
+                      tr('扫码填充服务器与密码', 'Scan QR to fill server/password'),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text(
+                    tr(
+                      '客户端设备 ID 需手动填写。',
+                      'Client device ID must be entered manually.',
+                    ),
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
           ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: Text(tr('取消', 'Cancel')),
+            ),
+            FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(tr('添加', 'Add')),
+            ),
+          ],
         ),
-        actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('取消', 'Cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('添加', 'Add'))),
-        ],
-      ),
-    );
+      );
 
-    if (confirmed != true) return;
+      if (confirmed != true) return;
 
-    final now = DateTime.now().millisecondsSinceEpoch;
-    final id = 'profile_$now';
-    final profile = AppServerProfile(
-      id: id,
-      name: nameCtrl.text.trim().isEmpty ? tr('新配置', 'New Profile') : nameCtrl.text.trim(),
-      serverBaseUrl: serverCtrl.text.trim(),
-      deviceId: deviceCtrl.text.trim(),
-      password: passwordCtrl.text.trim(),
-      updatedAt: now,
-    );
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final id = 'profile_$now';
+      final profile = AppServerProfile(
+        id: id,
+        name: nameCtrl.text.trim().isEmpty
+            ? tr('新配置', 'New Profile')
+            : nameCtrl.text.trim(),
+        serverBaseUrl: serverCtrl.text.trim(),
+        deviceId: deviceCtrl.text.trim(),
+        password: passwordCtrl.text.trim(),
+        updatedAt: now,
+      );
 
-    setState(() {
-      _applyFormToActiveProfile();
-      _profiles = [profile, ..._profiles];
-      _activeProfileId = id;
-      _loadProfileIntoForm(_activeProfileId);
-    });
+      setState(() {
+        _applyFormToActiveProfile();
+        _profiles = [profile, ..._profiles];
+        _activeProfileId = id;
+        _loadProfileIntoForm(_activeProfileId);
+      });
 
-    await _refreshGatewayOnlineStatus(interactive: false);
+      await _refreshGatewayOnlineStatus(interactive: false);
+    } finally {
+      nameCtrl.dispose();
+      serverCtrl.dispose();
+      deviceCtrl.dispose();
+      passwordCtrl.dispose();
+    }
   }
 
   Future<void> _reloadCertStatus() async {
@@ -407,7 +455,10 @@ class _SettingsPageState extends State<SettingsPage> {
     if (!mounted) return;
     setState(() {
       _certStatus = exists
-          ? tr('已导入服务器证书（在系统信任基础上追加信任）', 'Server certificate imported (added on top of system CAs).')
+          ? tr(
+              '已导入服务器证书（在系统信任基础上追加信任）',
+              'Server certificate imported (added on top of system CAs).',
+            )
           : tr(
               '未导入服务器证书。HTTPS 默认信任公开 CA 证书；如使用自签证书请导入 server-cert.cer',
               'No custom certificate imported. HTTPS trusts public CAs by default; import server-cert.cer only for self-signed servers.',
@@ -423,7 +474,12 @@ class _SettingsPageState extends State<SettingsPage> {
           XTypeGroup(
             label: 'certificate',
             extensions: ['cer', 'crt', 'pem', 'der'],
-            mimeTypes: ['application/x-x509-ca-cert', 'application/pkix-cert', 'application/octet-stream', 'text/plain'],
+            mimeTypes: [
+              'application/x-x509-ca-cert',
+              'application/pkix-cert',
+              'application/octet-stream',
+              'text/plain',
+            ],
             uniformTypeIdentifiers: ['public.x509-certificate', 'public.data'],
           ),
         ],
@@ -435,12 +491,16 @@ class _SettingsPageState extends State<SettingsPage> {
       await widget.settings.importTrustedCertificate(bytes);
       if (!mounted) return;
       setState(() {
-        _certStatus = '${tr('证书已导入：', 'Certificate imported: ')}${file.name}'
+        _certStatus =
+            '${tr('证书已导入：', 'Certificate imported: ')}${file.name}'
             '${Platform.isIOS ? '\n${tr('若仍连接失败，请在 iOS 系统中安装并信任该证书。', 'If connection still fails, install and trust this cert in iOS system settings.')}' : ''}';
       });
     } catch (e) {
       if (!mounted) return;
-      setState(() => _certStatus = '${tr('证书导入失败', 'Certificate import failed')}: ${_appendIosCertificateHint(e)}');
+      setState(
+        () => _certStatus =
+            '${tr('证书导入失败', 'Certificate import failed')}: ${_appendIosCertificateHint(e)}',
+      );
     } finally {
       if (mounted) {
         setState(() => _certBusy = false);
@@ -468,14 +528,19 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Future<void> _refreshGatewayOnlineStatus({bool interactive = false}) async {
+    final requestId = ++_gatewayStatusRequestId;
     final server = _serverCtrl.text.trim();
     final device = _deviceCtrl.text.trim();
     final password = _passwordCtrl.text.trim();
     if (server.isEmpty || device.isEmpty) {
       if (!mounted) return;
       setState(() {
+        _gatewayStatusBusy = false;
         _gatewayOnlineStatus = null;
-        _gatewayOnlineStatusError = tr('请先填写服务器地址和设备 ID', 'Please fill server URL and device ID first');
+        _gatewayOnlineStatusError = tr(
+          '请先填写服务器地址和设备 ID',
+          'Please fill server URL and device ID first',
+        );
       });
       return;
     }
@@ -486,17 +551,21 @@ class _SettingsPageState extends State<SettingsPage> {
     });
 
     try {
-      final uri = Uri.parse('$server/api/client/gateways/${Uri.encodeComponent(device)}/online');
+      final uri = Uri.parse(
+        '$server/api/client/gateways/${Uri.encodeComponent(device)}/online',
+      );
       final body = await _getJson(uri, password: password);
-      final parsed = GatewayOnlineStatus.fromJson(jsonDecode(body) as Map<String, dynamic>);
-      if (!mounted) return;
+      final parsed = GatewayOnlineStatus.fromJson(
+        jsonDecode(body) as Map<String, dynamic>,
+      );
+      if (!mounted || requestId != _gatewayStatusRequestId) return;
       setState(() {
         _gatewayOnlineStatus = parsed;
         _gatewayOnlineStatusError = null;
       });
     } catch (e) {
       final displayError = _appendIosCertificateHint(e);
-      if (!mounted) return;
+      if (!mounted || requestId != _gatewayStatusRequestId) return;
       setState(() {
         _gatewayOnlineStatus = null;
         _gatewayOnlineStatusError = displayError;
@@ -504,47 +573,66 @@ class _SettingsPageState extends State<SettingsPage> {
       if (interactive) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${tr('获取网关状态失败', 'Failed to fetch gateway status')}: $displayError'),
+            content: Text(
+              '${tr('获取网关状态失败', 'Failed to fetch gateway status')}: $displayError',
+            ),
             behavior: SnackBarBehavior.floating,
           ),
         );
       }
     } finally {
-      if (mounted) {
+      if (mounted && requestId == _gatewayStatusRequestId) {
         setState(() => _gatewayStatusBusy = false);
       }
     }
   }
 
   Future<void> _saveAndClose({bool clearLocalDatabase = false}) async {
-    _applyFormToActiveProfile();
+    if (_savingSettings) return;
+    setState(() => _savingSettings = true);
 
-    for (final p in _profiles) {
-      await widget.settings.upsertProfile(p, setActive: false);
-    }
-    await widget.settings.activateProfile(_activeProfileId);
-
-    final active = _profileById(_activeProfileId);
-    widget.settings.serverBaseUrl = active.serverBaseUrl;
-    widget.settings.deviceId = active.deviceId;
-    widget.settings.password = active.password;
-    widget.settings.themeMode = _themeMode;
-    widget.settings.androidLauncherIconMode = _androidLauncherIconMode;
-    await widget.settings.save();
-
-    if (!mounted) return;
-    Navigator.pop(
-      context,
-      SettingsResult(
-        serverBaseUrl: active.serverBaseUrl,
-        deviceId: active.deviceId,
-        password: active.password,
-        themeMode: _themeMode,
+    var popped = false;
+    try {
+      _applyFormToActiveProfile();
+      await widget.settings.saveProfilesAndSettings(
+        profiles: _profiles,
         activeProfileId: _activeProfileId,
+        themeMode: _themeMode,
         androidLauncherIconMode: _androidLauncherIconMode,
-        clearLocalDatabase: clearLocalDatabase,
-      ),
-    );
+      );
+
+      final active = widget.settings.profiles.firstWhere(
+        (p) => p.id == widget.settings.activeProfileId,
+        orElse: () => _profileById(_activeProfileId),
+      );
+
+      if (!mounted) return;
+      Navigator.pop(
+        context,
+        SettingsResult(
+          serverBaseUrl: active.serverBaseUrl,
+          deviceId: active.deviceId,
+          password: active.password,
+          themeMode: _themeMode,
+          activeProfileId: widget.settings.activeProfileId,
+          androidLauncherIconMode: _androidLauncherIconMode,
+          clearLocalDatabase: clearLocalDatabase,
+        ),
+      );
+      popped = true;
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          behavior: SnackBarBehavior.floating,
+          content: Text('${tr('保存失败', 'Save failed')}: $e'),
+        ),
+      );
+    } finally {
+      if (mounted && !popped) {
+        setState(() => _savingSettings = false);
+      }
+    }
   }
 
   Future<void> _confirmClearLocalDatabase() async {
@@ -559,8 +647,14 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
         ),
         actions: [
-          TextButton(onPressed: () => Navigator.pop(context, false), child: Text(tr('取消', 'Cancel'))),
-          FilledButton(onPressed: () => Navigator.pop(context, true), child: Text(tr('清空', 'Clear'))),
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: Text(tr('取消', 'Cancel')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(tr('清空', 'Clear')),
+          ),
         ],
       ),
     );
@@ -570,17 +664,21 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  String _simLabel(int slotIndex) => tr('卡${slotIndex + 1}', 'SIM ${slotIndex + 1}');
+  String _simLabel(int slotIndex) =>
+      tr('卡${slotIndex + 1}', 'SIM ${slotIndex + 1}');
 
   String _formatDateTime(int timestampMs) {
     final dt = DateTime.fromMillisecondsSinceEpoch(timestampMs).toLocal();
     final now = DateTime.now();
-    final sameDay = dt.year == now.year && dt.month == now.month && dt.day == now.day;
+    final sameDay =
+        dt.year == now.year && dt.month == now.month && dt.day == now.day;
     String two(int value) => value.toString().padLeft(2, '0');
     if (sameDay) {
       return '${two(dt.hour)}:${two(dt.minute)}:${two(dt.second)}';
     }
-    return _isZh ? '${dt.year}年${dt.month}月${dt.day}日' : '${dt.year}/${two(dt.month)}/${two(dt.day)}';
+    return _isZh
+        ? '${dt.year}年${dt.month}月${dt.day}日'
+        : '${dt.year}/${two(dt.month)}/${two(dt.day)}';
   }
 
   Widget _buildGatewayOnlineStatusRow() {
@@ -589,22 +687,23 @@ class _SettingsPageState extends State<SettingsPage> {
     final bgColor = status == null
         ? Theme.of(context).colorScheme.surfaceContainerHighest
         : isOnline
-            ? Colors.green.withValues(alpha: 0.14)
-            : Theme.of(context).colorScheme.errorContainer;
+        ? Colors.green.withValues(alpha: 0.14)
+        : Theme.of(context).colorScheme.errorContainer;
     final fgColor = status == null
         ? Theme.of(context).colorScheme.onSurfaceVariant
         : isOnline
-            ? Colors.green.shade800
-            : Theme.of(context).colorScheme.onErrorContainer;
+        ? Colors.green.shade800
+        : Theme.of(context).colorScheme.onErrorContainer;
     final statusText = _gatewayStatusBusy
         ? tr('状态检测中…', 'Checking...')
         : status == null
-            ? tr('状态未知', 'Unknown')
-            : status.isOnline
-                ? tr('网关在线', 'Gateway Online')
-                : tr('网关离线', 'Gateway Offline');
-    final lastSeenText =
-        status?.lastSeenAt == null ? '--' : '${tr('最近心跳', 'Last seen')}: ${_formatDateTime(status!.lastSeenAt!)}';
+        ? tr('状态未知', 'Unknown')
+        : status.isOnline
+        ? tr('网关在线', 'Gateway Online')
+        : tr('网关离线', 'Gateway Offline');
+    final lastSeenText = status?.lastSeenAt == null
+        ? '--'
+        : '${tr('最近心跳', 'Last seen')}: ${_formatDateTime(status!.lastSeenAt!)}';
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -613,7 +712,9 @@ class _SettingsPageState extends State<SettingsPage> {
           children: [
             IconButton(
               tooltip: tr('刷新网关状态', 'Refresh gateway status'),
-              onPressed: _gatewayStatusBusy ? null : () => _refreshGatewayOnlineStatus(interactive: true),
+              onPressed: _gatewayStatusBusy
+                  ? null
+                  : () => _refreshGatewayOnlineStatus(interactive: true),
               icon: _gatewayStatusBusy
                   ? const SizedBox(
                       width: 18,
@@ -642,26 +743,33 @@ class _SettingsPageState extends State<SettingsPage> {
                 mainAxisSize: MainAxisSize.min,
                 children: [
                   Icon(
-                    status == null ? Icons.help_outline : (isOnline ? Icons.check_circle : Icons.error_outline),
+                    status == null
+                        ? Icons.help_outline
+                        : (isOnline ? Icons.check_circle : Icons.error_outline),
                     size: 16,
                     color: fgColor,
                   ),
                   const SizedBox(width: 6),
                   Text(
                     statusText,
-                    style: Theme.of(context).textTheme.labelMedium?.copyWith(color: fgColor),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.labelMedium?.copyWith(color: fgColor),
                   ),
                 ],
               ),
             ),
           ],
         ),
-        if (_gatewayOnlineStatusError != null && _gatewayOnlineStatusError!.trim().isNotEmpty)
+        if (_gatewayOnlineStatusError != null &&
+            _gatewayOnlineStatusError!.trim().isNotEmpty)
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: Text(
               '${tr('状态信息', 'Status detail')}: ${_gatewayOnlineStatusError!.trim()}',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Theme.of(context).colorScheme.error),
+              style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                color: Theme.of(context).colorScheme.error,
+              ),
             ),
           ),
       ],
@@ -669,30 +777,45 @@ class _SettingsPageState extends State<SettingsPage> {
   }
 
   Widget _buildSimInfoCard() {
-    final sims = [...widget.simProfiles]..sort((a, b) => a.slotIndex.compareTo(b.slotIndex));
+    final sims = [...widget.simProfiles]
+      ..sort((a, b) => a.slotIndex.compareTo(b.slotIndex));
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text(tr('网关号码信息', 'Gateway SIM Numbers'), style: Theme.of(context).textTheme.titleMedium),
+            Text(
+              tr('网关号码信息', 'Gateway SIM Numbers'),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
             const SizedBox(height: 8),
             _buildGatewayOnlineStatusRow(),
             const SizedBox(height: 8),
             if (sims.isEmpty)
-              Text(tr('暂无 SIM 信息，请先返回首页刷新。', 'No SIM info yet. Please refresh from home page first.')),
+              Text(
+                tr(
+                  '暂无 SIM 信息，请先返回首页刷新。',
+                  'No SIM info yet. Please refresh from home page first.',
+                ),
+              ),
             for (final sim in sims)
               Container(
                 margin: const EdgeInsets.only(bottom: 8),
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 10,
+                ),
                 decoration: BoxDecoration(
                   color: Theme.of(context).colorScheme.surfaceContainerHighest,
                   borderRadius: BorderRadius.circular(12),
                 ),
                 child: Row(
                   children: [
-                    Icon(Icons.sim_card, color: Theme.of(context).colorScheme.primary),
+                    Icon(
+                      Icons.sim_card,
+                      color: Theme.of(context).colorScheme.primary,
+                    ),
                     const SizedBox(width: 10),
                     Expanded(
                       child: Text(
@@ -703,7 +826,9 @@ class _SettingsPageState extends State<SettingsPage> {
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      (sim.phoneNumber?.trim().isNotEmpty ?? false) ? sim.phoneNumber!.trim() : tr('未读取', 'Unknown'),
+                      (sim.phoneNumber?.trim().isNotEmpty ?? false)
+                          ? sim.phoneNumber!.trim()
+                          : tr('未读取', 'Unknown'),
                       style: Theme.of(context).textTheme.bodyMedium,
                     ),
                   ],
@@ -732,7 +857,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: Column(
                   children: [
                     DropdownButtonFormField<String>(
-                      value: _activeProfileId,
+                      initialValue: _activeProfileId,
                       decoration: InputDecoration(
                         labelText: tr('当前配置', 'Active Profile'),
                         border: const OutlineInputBorder(),
@@ -741,7 +866,10 @@ class _SettingsPageState extends State<SettingsPage> {
                           .map(
                             (p) => DropdownMenuItem<String>(
                               value: p.id,
-                              child: Text(p.name, overflow: TextOverflow.ellipsis),
+                              child: Text(
+                                p.name,
+                                overflow: TextOverflow.ellipsis,
+                              ),
                             ),
                           )
                           .toList(),
@@ -765,7 +893,10 @@ class _SettingsPageState extends State<SettingsPage> {
                         child: Align(
                           alignment: Alignment.centerLeft,
                           child: Text(
-                            tr('保存后将切换配置并清空当前列表，加载目标配置短信。', 'Saving will switch profile, clear current list, and load the selected profile messages.'),
+                            tr(
+                              '保存后将切换配置并清空当前列表，加载目标配置短信。',
+                              'Saving will switch profile, clear current list, and load the selected profile messages.',
+                            ),
                             style: Theme.of(context).textTheme.bodySmall,
                           ),
                         ),
@@ -777,23 +908,35 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: 12),
             TextField(
               controller: _profileNameCtrl,
-              decoration: InputDecoration(labelText: tr('配置名称', 'Profile Name'), border: const OutlineInputBorder()),
+              decoration: InputDecoration(
+                labelText: tr('配置名称', 'Profile Name'),
+                border: const OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _serverCtrl,
-              decoration: InputDecoration(labelText: tr('服务器地址', 'Server Base URL'), border: const OutlineInputBorder()),
+              decoration: InputDecoration(
+                labelText: tr('服务器地址', 'Server Base URL'),
+                border: const OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _deviceCtrl,
-              decoration: InputDecoration(labelText: tr('设备 ID', 'Device ID'), border: const OutlineInputBorder()),
+              decoration: InputDecoration(
+                labelText: tr('设备 ID', 'Device ID'),
+                border: const OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 12),
             TextField(
               controller: _passwordCtrl,
               obscureText: true,
-              decoration: InputDecoration(labelText: tr('密码', 'Password'), border: const OutlineInputBorder()),
+              decoration: InputDecoration(
+                labelText: tr('密码', 'Password'),
+                border: const OutlineInputBorder(),
+              ),
             ),
             const SizedBox(height: 12),
             Align(
@@ -801,31 +944,49 @@ class _SettingsPageState extends State<SettingsPage> {
               child: OutlinedButton.icon(
                 onPressed: _scanOnboardingIntoMainForm,
                 icon: const Icon(Icons.qr_code_scanner),
-                label: Text(tr('扫码填充服务器与密码', 'Scan QR to fill server/password')),
+                label: Text(
+                  tr('扫码填充服务器与密码', 'Scan QR to fill server/password'),
+                ),
               ),
             ),
             const SizedBox(height: 6),
             Text(
-              tr('客户端设备 ID 需手动填写。', 'Client device ID must be entered manually.'),
+              tr(
+                '客户端设备 ID 需手动填写。',
+                'Client device ID must be entered manually.',
+              ),
               style: Theme.of(context).textTheme.bodySmall,
             ),
             const SizedBox(height: 12),
             _buildSimInfoCard(),
             const SizedBox(height: 12),
             DropdownButtonFormField<ThemeMode>(
-              value: _themeMode,
-              decoration: InputDecoration(labelText: tr('主题', 'Theme'), border: const OutlineInputBorder()),
+              initialValue: _themeMode,
+              decoration: InputDecoration(
+                labelText: tr('主题', 'Theme'),
+                border: const OutlineInputBorder(),
+              ),
               items: [
-                DropdownMenuItem(value: ThemeMode.system, child: Text(tr('跟随系统', 'System'))),
-                DropdownMenuItem(value: ThemeMode.light, child: Text(tr('浅色', 'Light'))),
-                DropdownMenuItem(value: ThemeMode.dark, child: Text(tr('深色', 'Dark'))),
+                DropdownMenuItem(
+                  value: ThemeMode.system,
+                  child: Text(tr('跟随系统', 'System')),
+                ),
+                DropdownMenuItem(
+                  value: ThemeMode.light,
+                  child: Text(tr('浅色', 'Light')),
+                ),
+                DropdownMenuItem(
+                  value: ThemeMode.dark,
+                  child: Text(tr('深色', 'Dark')),
+                ),
               ],
-              onChanged: (v) => setState(() => _themeMode = v ?? ThemeMode.system),
+              onChanged: (v) =>
+                  setState(() => _themeMode = v ?? ThemeMode.system),
             ),
             if (Platform.isAndroid) ...[
               const SizedBox(height: 12),
               DropdownButtonFormField<AndroidLauncherIconMode>(
-                value: _androidLauncherIconMode,
+                initialValue: _androidLauncherIconMode,
                 decoration: InputDecoration(
                   labelText: tr('安卓桌面图标', 'Android Launcher Icon'),
                   border: const OutlineInputBorder(),
@@ -844,20 +1005,27 @@ class _SettingsPageState extends State<SettingsPage> {
                     child: Text(tr('深色图标', 'Dark Icon')),
                   ),
                 ],
-                onChanged: (v) => setState(() => _androidLauncherIconMode = v ?? AndroidLauncherIconMode.defaultMode),
+                onChanged: (v) => setState(
+                  () => _androidLauncherIconMode =
+                      v ?? AndroidLauncherIconMode.defaultMode,
+                ),
               ),
             ],
             const SizedBox(height: 12),
             OutlinedButton.icon(
               onPressed: _certBusy ? null : _importServerCertificate,
               icon: _certBusy
-                  ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Icon(Icons.file_open),
               label: Text(tr('导入服务器证书', 'Import Server Certificate')),
             ),
             const SizedBox(height: 8),
             OutlinedButton.icon(
-              onPressed: _confirmClearLocalDatabase,
+              onPressed: _savingSettings ? null : _confirmClearLocalDatabase,
               icon: const Icon(Icons.delete_forever_outlined),
               label: Text(tr('清空本地数据库', 'Clear local database')),
             ),
@@ -867,8 +1035,14 @@ class _SettingsPageState extends State<SettingsPage> {
             SizedBox(
               width: double.infinity,
               child: FilledButton.icon(
-                onPressed: _saveAndClose,
-                icon: const Icon(Icons.save),
+                onPressed: _savingSettings ? null : _saveAndClose,
+                icon: _savingSettings
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save),
                 label: Text(tr('保存', 'Save')),
               ),
             ),

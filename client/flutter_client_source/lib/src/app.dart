@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 
 import 'package:flutter/material.dart';
 
@@ -18,7 +18,8 @@ class _RemoteMessageAppState extends State<RemoteMessageApp> {
   final settings = AppSettingsStore();
   ThemeMode _themeMode = ThemeMode.system;
 
-  bool get _useBundledDesktopFont => Platform.isLinux || Platform.isWindows || Platform.isMacOS;
+  bool get _useBundledDesktopFont =>
+      Platform.isLinux || Platform.isWindows || Platform.isMacOS;
 
   ThemeData _buildTheme(Brightness brightness) {
     return ThemeData(
@@ -32,17 +33,23 @@ class _RemoteMessageAppState extends State<RemoteMessageApp> {
   @override
   void initState() {
     super.initState();
-    settings.load().then((_) async {
-      await AndroidLauncherIconService.applyMode(settings.androidLauncherIconMode);
-      if (!mounted) return;
-      setState(() => _themeMode = settings.themeMode);
-    });
+    settings
+        .load()
+        .then((_) async {
+          await AndroidLauncherIconService.applyMode(
+            settings.androidLauncherIconMode,
+          );
+          if (!mounted) return;
+          setState(() => _themeMode = settings.themeMode);
+        })
+        .catchError((Object error, StackTrace stackTrace) {
+          debugPrint('Failed to load settings at app startup: $error');
+        });
   }
 
   Future<void> _onThemeChanged(ThemeMode mode) async {
     setState(() => _themeMode = mode);
-    settings.themeMode = mode;
-    await settings.save();
+    await settings.saveThemeMode(mode);
   }
 
   @override
@@ -52,7 +59,10 @@ class _RemoteMessageAppState extends State<RemoteMessageApp> {
       themeMode: _themeMode,
       theme: _buildTheme(Brightness.light),
       darkTheme: _buildTheme(Brightness.dark),
-      home: MessageHomePage(settings: settings, onThemeChanged: _onThemeChanged),
+      home: MessageHomePage(
+        settings: settings,
+        onThemeChanged: _onThemeChanged,
+      ),
     );
   }
 }

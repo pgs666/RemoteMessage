@@ -1,21 +1,27 @@
 use std::{path::PathBuf, time::Duration};
 
 use anyhow::Context;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use rand::{RngCore, rngs::OsRng};
 use rusqlite::{OptionalExtension, params};
+use sha2::{Digest, Sha256};
 
 use crate::{
     config::ServerRuntimeSettings,
     models::{
-        DatabaseMaintenanceResult, GatewayOnlineStatusRecord, GatewaySimProfilePayload,
-        GatewaySimProfileRecord, GatewaySummaryRecord, OutboundStatusUpdateRequest,
-        PendingOutbound, ServerDataClearResult, SmsPayload,
+        AuthCredentialRecord, CreatedAuthCredential, DatabaseMaintenanceResult,
+        DefaultAuthCredentials, GatewayOnlineStatusRecord, GatewayRegistrationResult,
+        GatewaySimProfilePayload, GatewaySimProfileRecord, GatewaySummaryRecord,
+        OutboundStatusUpdateRequest, PendingOutbound, ServerDataClearResult, SmsPayload,
     },
     runtime::{now_millis, runtime_directory},
 };
 
 const OUTBOX_LEASE_TIMEOUT_MS: i64 = 60_000;
-const CURRENT_SCHEMA_VERSION: i32 = 3;
+const CURRENT_SCHEMA_VERSION: i32 = 4;
 const MAINTENANCE_DELETE_BATCH_SIZE: i32 = 2_000;
+pub const AUTH_ROLE_CLIENT: &str = "client";
+pub const AUTH_ROLE_GATEWAY: &str = "gateway";
 
 #[derive(Clone)]
 pub struct SqliteRepository {
@@ -33,6 +39,133 @@ impl SqliteRepository {
 
     pub fn database_file_path(&self) -> &PathBuf {
         &self.database_file_path
+    }
+
+    pub fn ensure_default_auth_credentials(&self) -> anyhow::Result<DefaultAuthCredentials> {
+        let mut result = DefaultAuthCredentials::default();
+        if !self.has_active_auth_credential(AUTH_ROLE_CLIENT)? {
+            result.client =
+                Some(self.create_auth_credential(AUTH_ROLE_CLIENT, "Default client", None)?);
+        }
+        if !self.has_active_auth_credential(AUTH_ROLE_GATEWAY)? {
+            result.gateway =
+                Some(self.create_auth_credential(AUTH_ROLE_GATEWAY, "Default gateway", None)?);
+        }
+        Ok(result)
+    }
+
+    pub fn create_client_auth_credential(
+        &self,
+        display_name: Option<&str>,
+    ) -> anyhow::Result<CreatedAuthCredential> {
+        let name = normalize_credential_display_name(display_name, AUTH_ROLE_CLIENT);
+        self.create_auth_credential(AUTH_ROLE_CLIENT, &name, None)
+    }
+
+    pub fn create_gateway_auth_credential(
+        &self,
+        display_name: Option<&str>,
+    ) -> anyhow::Result<CreatedAuthCredential> {
+        let name = normalize_credential_display_name(display_name, AUTH_ROLE_GATEWAY);
+        self.create_auth_credential(AUTH_ROLE_GATEWAY, &name, None)
+    }
+
+    pub fn authenticate_auth_token(
+        &self,
+        role: &str,
+        token: &str,
+    ) -> anyhow::Result<Option<AuthCredentialRecord>> {
+        let role = normalize_auth_role(role)?;
+        let token = token.trim();
+        if token.is_empty() {
+            return Ok(None);
+        }
+        let token_sha256 = token_sha256(token);
+        let conn = self.open()?;
+        let record = conn
+            .query_row(
+                "\
+SELECT id, role, bound_device_id
+FROM auth_credentials
+WHERE role = ?1 AND token_sha256 = ?2 AND revoked_at IS NULL
+LIMIT 1;",
+                params![role, token_sha256],
+                read_auth_credential,
+            )
+            .optional()?;
+        if let Some(record) = &record {
+            let _ = conn.execute(
+                "UPDATE auth_credentials SET last_used_at = ?1 WHERE id = ?2;",
+                params![now_millis(), record.id],
+            );
+        }
+        Ok(record)
+    }
+
+    fn has_active_auth_credential(&self, role: &str) -> anyhow::Result<bool> {
+        let role = normalize_auth_role(role)?;
+        let conn = self.open()?;
+        let count: i64 = conn.query_row(
+            "SELECT COUNT(1) FROM auth_credentials WHERE role = ?1 AND revoked_at IS NULL;",
+            params![role],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    fn create_auth_credential(
+        &self,
+        role: &str,
+        display_name: &str,
+        bound_device_id: Option<&str>,
+    ) -> anyhow::Result<CreatedAuthCredential> {
+        let token = generate_auth_token();
+        self.create_auth_credential_with_token(role, display_name, &token, bound_device_id)
+    }
+
+    fn create_auth_credential_with_token(
+        &self,
+        role: &str,
+        display_name: &str,
+        token: &str,
+        bound_device_id: Option<&str>,
+    ) -> anyhow::Result<CreatedAuthCredential> {
+        let role = normalize_auth_role(role)?;
+        let token = token.trim();
+        let id = uuid::Uuid::new_v4().simple().to_string();
+        let created_at = now_millis();
+        let normalized_name = truncate_chars(display_name.trim(), 128);
+        let display_name = if normalized_name.is_empty() {
+            normalize_credential_display_name(None, role)
+        } else {
+            normalized_name
+        };
+        let normalized_bound_device_id =
+            bound_device_id.and_then(|value| normalize_non_empty_text(value, 128));
+        let conn = self.open()?;
+        conn.execute(
+            "\
+INSERT INTO auth_credentials(
+    id, role, display_name, token_sha256, bound_device_id, created_at, last_used_at, revoked_at
+)
+VALUES(?1, ?2, ?3, ?4, ?5, ?6, NULL, NULL);",
+            params![
+                id,
+                role,
+                display_name,
+                token_sha256(token),
+                normalized_bound_device_id,
+                created_at,
+            ],
+        )?;
+        Ok(CreatedAuthCredential {
+            id,
+            role: role.to_owned(),
+            display_name,
+            token: token.to_owned(),
+            bound_device_id: normalized_bound_device_id,
+            created_at,
+        })
     }
 
     pub fn insert_message_if_not_exists(&self, payload: &SmsPayload) -> anyhow::Result<bool> {
@@ -66,24 +199,49 @@ VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13);",
     pub fn query_messages(
         &self,
         since_ts: Option<i64>,
+        after_id: Option<String>,
         limit: Option<i32>,
         phone: Option<String>,
+        device_id: Option<String>,
     ) -> anyhow::Result<Vec<SmsPayload>> {
         let limit = limit.unwrap_or(5000).clamp(1, 10000);
         let normalized_phone = phone.filter(|value| !value.trim().is_empty());
+        let normalized_device_id =
+            device_id.and_then(|value| normalize_non_empty_text(&value, 128));
+        let since_ts = since_ts.unwrap_or(-1).max(-1);
+        let after_id = after_id.unwrap_or_default();
         let conn = self.open()?;
         let mut stmt = conn.prepare(
             "\
 SELECT
     id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count,
     send_status, send_error_code, send_error_message, updated_at
-FROM messages
-WHERE (?1 IS NULL OR timestamp >= ?1 OR updated_at >= ?1)
-  AND (?2 IS NULL OR phone = ?2)
-ORDER BY timestamp ASC
-LIMIT ?3;",
+FROM (
+    SELECT
+        id, device_id, phone, content, timestamp, direction, sim_slot_index, sim_phone_number, sim_count,
+        send_status, send_error_code, send_error_message, updated_at,
+        CASE
+            WHEN COALESCE(updated_at, 0) > timestamp THEN updated_at
+            ELSE timestamp
+        END AS sync_cursor
+    FROM messages
+)
+WHERE (sync_cursor > ?1 OR (sync_cursor = ?1 AND id > ?2))
+  AND (?3 IS NULL OR device_id = ?3)
+  AND (?4 IS NULL OR phone = ?4)
+ORDER BY sync_cursor ASC, id ASC
+LIMIT ?5;",
         )?;
-        let rows = stmt.query_map(params![since_ts, normalized_phone, limit], read_sms_payload)?;
+        let rows = stmt.query_map(
+            params![
+                since_ts,
+                after_id,
+                normalized_device_id,
+                normalized_phone,
+                limit
+            ],
+            read_sms_payload,
+        )?;
         collect_rows(rows)
     }
 
@@ -124,20 +282,83 @@ LIMIT ?3;",
         Ok(())
     }
 
-    pub fn upsert_gateway(&self, device_id: &str, public_key_pem: &str) -> anyhow::Result<()> {
-        let conn = self.open()?;
+    pub fn register_gateway_with_credential(
+        &self,
+        credential_id: &str,
+        device_id: &str,
+        public_key_pem: &str,
+    ) -> anyhow::Result<GatewayRegistrationResult> {
+        let mut conn = self.open()?;
+        let tx = conn.transaction()?;
+        let bound_device_id: Option<Option<String>> = tx
+            .query_row(
+                "SELECT bound_device_id FROM auth_credentials WHERE id = ?1 AND role = ?2 AND revoked_at IS NULL LIMIT 1;",
+                params![credential_id, AUTH_ROLE_GATEWAY],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(bound_device_id) = bound_device_id else {
+            tx.commit()?;
+            return Ok(GatewayRegistrationResult::CredentialNotFound);
+        };
+        if let Some(existing) = &bound_device_id
+            && existing != device_id
+        {
+            tx.commit()?;
+            return Ok(GatewayRegistrationResult::CredentialDeviceConflict);
+        }
+
+        let existing_public_key: Option<String> = tx
+            .query_row(
+                "SELECT public_key_pem FROM gateways WHERE device_id = ?1 LIMIT 1;",
+                params![device_id],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if bound_device_id.is_none() && existing_public_key.is_some() {
+            tx.commit()?;
+            return Ok(GatewayRegistrationResult::DeviceAlreadyRegistered);
+        }
+
         let ts = now_millis();
-        conn.execute(
-            "\
-INSERT INTO gateways(device_id, public_key_pem, updated_at, last_seen_at)
-VALUES(?1, ?2, ?3, ?3)
-ON CONFLICT(device_id) DO UPDATE SET
-  public_key_pem = excluded.public_key_pem,
-  updated_at = excluded.updated_at,
-  last_seen_at = excluded.last_seen_at;",
-            params![device_id, public_key_pem, ts],
-        )?;
-        Ok(())
+        let result = match existing_public_key {
+            Some(existing) if existing == public_key_pem => {
+                tx.execute(
+                    "UPDATE gateways SET updated_at = ?1, last_seen_at = ?1 WHERE device_id = ?2;",
+                    params![ts, device_id],
+                )?;
+                GatewayRegistrationResult::AlreadyRegistered
+            }
+            Some(_) if bound_device_id.as_deref() == Some(device_id) => {
+                tx.execute(
+                    "UPDATE gateways SET public_key_pem = ?1, updated_at = ?2, last_seen_at = ?2 WHERE device_id = ?3;",
+                    params![public_key_pem, ts, device_id],
+                )?;
+                GatewayRegistrationResult::PublicKeyUpdated
+            }
+            Some(_) => GatewayRegistrationResult::PublicKeyConflict,
+            None => {
+                tx.execute(
+                    "INSERT INTO gateways(device_id, public_key_pem, updated_at, last_seen_at) VALUES(?1, ?2, ?3, ?3);",
+                    params![device_id, public_key_pem, ts],
+                )?;
+                GatewayRegistrationResult::Created
+            }
+        };
+        if matches!(
+            result,
+            GatewayRegistrationResult::Created
+                | GatewayRegistrationResult::AlreadyRegistered
+                | GatewayRegistrationResult::PublicKeyUpdated
+        ) && bound_device_id.is_none()
+        {
+            tx.execute(
+                "UPDATE auth_credentials SET bound_device_id = ?1 WHERE id = ?2 AND bound_device_id IS NULL;",
+                params![device_id, credential_id],
+            )?;
+        }
+        tx.commit()?;
+        Ok(result)
     }
 
     pub fn touch_gateway_last_seen(&self, device_id: &str) -> anyhow::Result<bool> {
@@ -380,13 +601,14 @@ WHERE id = ?3
     ) -> anyhow::Result<bool> {
         let mut conn = self.open()?;
         let tx = conn.transaction()?;
+        let status_updated_at = now_millis();
         let affected = tx.execute(
             "\
 UPDATE messages
 SET send_status = ?1,
     send_error_code = ?2,
     send_error_message = ?3,
-    updated_at = ?4,
+    updated_at = MAX(COALESCE(updated_at, 0) + 1, ?4),
     sim_slot_index = COALESCE(?5, sim_slot_index),
     sim_phone_number = COALESCE(?6, sim_phone_number),
     sim_count = COALESCE(?7, sim_count)
@@ -395,7 +617,7 @@ WHERE id = ?8;",
                 req.status,
                 req.error_code,
                 req.error_message,
-                req.timestamp,
+                status_updated_at,
                 req.sim_slot_index,
                 req.sim_phone_number,
                 req.sim_count,
@@ -423,7 +645,7 @@ VALUES(?1, ?2, ?3, ?4, ?5, 'outbound', ?6, ?7, ?8, ?9, ?10, ?11, ?12);",
                     req.status,
                     req.error_code,
                     req.error_message,
-                    req.timestamp,
+                    status_updated_at,
                 ],
             )?;
         }
@@ -554,6 +776,14 @@ fn collect_rows<T>(
     Ok(list)
 }
 
+fn read_auth_credential(row: &rusqlite::Row<'_>) -> rusqlite::Result<AuthCredentialRecord> {
+    Ok(AuthCredentialRecord {
+        id: row.get(0)?,
+        role: row.get(1)?,
+        bound_device_id: row.get(2)?,
+    })
+}
+
 fn get_schema_version(conn: &rusqlite::Connection) -> anyhow::Result<i32> {
     conn.query_row("PRAGMA user_version;", [], |row| row.get(0))
         .map_err(Into::into)
@@ -636,11 +866,24 @@ CREATE TABLE IF NOT EXISTS api_logs(
     created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS auth_credentials(
+    id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    token_sha256 TEXT NOT NULL UNIQUE,
+    bound_device_id TEXT,
+    created_at INTEGER NOT NULL,
+    last_used_at INTEGER,
+    revoked_at INTEGER
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_phone_ts ON messages(phone, timestamp);
 CREATE INDEX IF NOT EXISTS idx_messages_ts ON messages(timestamp);
+CREATE INDEX IF NOT EXISTS idx_messages_device_updated_ts_id ON messages(device_id, updated_at, timestamp, id);
 CREATE INDEX IF NOT EXISTS idx_gateway_sim_profiles_device_id ON gateway_sim_profiles(device_id);
 CREATE INDEX IF NOT EXISTS idx_outbox_device_id ON outbox(device_id);
 CREATE INDEX IF NOT EXISTS idx_api_logs_created_at ON api_logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_auth_credentials_role_device ON auth_credentials(role, bound_device_id);
 ",
     )?;
     ensure_columns(conn)
@@ -657,6 +900,7 @@ fn ensure_columns(conn: &rusqlite::Connection) -> anyhow::Result<()> {
         "ALTER TABLE messages ADD COLUMN updated_at INTEGER;",
         "UPDATE messages SET updated_at = timestamp WHERE updated_at IS NULL OR updated_at <= 0;",
         "CREATE INDEX IF NOT EXISTS idx_messages_updated_at ON messages(updated_at);",
+        "CREATE INDEX IF NOT EXISTS idx_messages_device_updated_ts_id ON messages(device_id, updated_at, timestamp, id);",
         "ALTER TABLE outbox ADD COLUMN lease_token TEXT;",
         "ALTER TABLE outbox ADD COLUMN leased_at INTEGER;",
         "CREATE INDEX IF NOT EXISTS idx_outbox_device_lease ON outbox(device_id, leased_at);",
@@ -812,6 +1056,131 @@ fn normalize_send_status_text(status: Option<&str>) -> Option<String> {
     }
 }
 
+fn normalize_auth_role(role: &str) -> anyhow::Result<&'static str> {
+    match role.trim().to_ascii_lowercase().as_str() {
+        AUTH_ROLE_CLIENT => Ok(AUTH_ROLE_CLIENT),
+        AUTH_ROLE_GATEWAY => Ok(AUTH_ROLE_GATEWAY),
+        _ => anyhow::bail!("invalid auth credential role"),
+    }
+}
+
+fn normalize_credential_display_name(display_name: Option<&str>, role: &str) -> String {
+    let default_prefix = match role {
+        AUTH_ROLE_GATEWAY => "Gateway",
+        _ => "Client",
+    };
+    display_name
+        .and_then(|value| normalize_non_empty_text(value, 128))
+        .unwrap_or_else(|| format!("{default_prefix} {}", now_millis()))
+}
+
+fn normalize_non_empty_text(value: &str, max_length: usize) -> Option<String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(value, max_length))
+}
+
+fn generate_auth_token() -> String {
+    let mut bytes = [0_u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    STANDARD.encode(bytes)
+}
+
+fn token_sha256(token: &str) -> String {
+    let hash = Sha256::digest(token.trim().as_bytes());
+    to_lower_hex(&hash)
+}
+
+fn to_lower_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
 fn truncate_chars(value: &str, max_length: usize) -> String {
     value.chars().take(max_length).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_repo() -> anyhow::Result<(SqliteRepository, PathBuf)> {
+        let path = std::env::temp_dir().join(format!(
+            "remote-message-repository-test-{}.db",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let repo = SqliteRepository {
+            database_file_path: path.clone(),
+        };
+        repo.ensure_schema()?;
+        Ok((repo, path))
+    }
+
+    #[test]
+    fn outbound_status_update_advances_incremental_cursor() -> anyhow::Result<()> {
+        let (repo, path) = test_repo()?;
+        let device_id = "gateway-test".to_owned();
+        let message_id = "message-test".to_owned();
+        let queued_at = now_millis() + 3_600_000;
+
+        repo.insert_message_if_not_exists(&SmsPayload {
+            id: message_id.clone(),
+            device_id: device_id.clone(),
+            phone: "+10000000000".to_owned(),
+            content: "test".to_owned(),
+            timestamp: queued_at,
+            direction: "outbound".to_owned(),
+            sim_slot_index: None,
+            sim_phone_number: None,
+            sim_count: None,
+            send_status: Some("queued".to_owned()),
+            send_error_code: None,
+            send_error_message: None,
+            updated_at: Some(queued_at),
+        })?;
+
+        let before = repo.query_messages(
+            Some(queued_at),
+            Some(message_id.clone()),
+            Some(10),
+            None,
+            Some(device_id.clone()),
+        )?;
+        assert!(before.is_empty());
+
+        repo.upsert_outbound_status(&OutboundStatusUpdateRequest {
+            device_id: device_id.clone(),
+            message_id: message_id.clone(),
+            target_phone: "+10000000000".to_owned(),
+            status: "failed".to_owned(),
+            timestamp: queued_at - 10_000,
+            content: Some("test".to_owned()),
+            sim_slot_index: None,
+            sim_phone_number: None,
+            sim_count: None,
+            error_code: Some(1),
+            error_message: Some("simulator has no sms capability".to_owned()),
+        })?;
+
+        let after = repo.query_messages(
+            Some(queued_at),
+            Some(message_id),
+            Some(10),
+            None,
+            Some(device_id),
+        )?;
+        assert_eq!(after.len(), 1);
+        assert_eq!(after[0].send_status.as_deref(), Some("failed"));
+        assert!(after[0].updated_at.unwrap_or_default() > queued_at);
+
+        let _ = std::fs::remove_file(path);
+        Ok(())
+    }
 }

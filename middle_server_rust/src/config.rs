@@ -16,8 +16,6 @@ const DEFAULT_MAINTENANCE_INTERVAL_MINUTES: i32 = 60;
 
 #[derive(Clone, Debug)]
 pub struct ServerRuntimeSettings {
-    pub gateway_token: String,
-    pub client_token: String,
     pub admin_token: String,
     pub https_port: u16,
     pub log_retention_days: i32,
@@ -27,13 +25,10 @@ pub struct ServerRuntimeSettings {
     pub database_max_bytes: i64,
     pub maintenance_interval_minutes: i32,
     pub server_config_file_path: PathBuf,
-    pub is_first_start: bool,
 }
 
 struct WritableConfig<'a> {
     https_port: u16,
-    gateway_token: &'a str,
-    client_token: &'a str,
     admin_token: &'a str,
     log_retention_days: i32,
     log_max_mb: i32,
@@ -51,15 +46,11 @@ impl ServerRuntimeSettings {
         let server_config_file_path = base_dir.join("server.conf");
 
         if !server_config_file_path.exists() {
-            let gateway_token = generate_secret();
-            let client_token = generate_secret();
             let admin_token = generate_secret();
             write_server_config(
                 &server_config_file_path,
                 &WritableConfig {
                     https_port: DEFAULT_HTTPS_PORT,
-                    gateway_token: &gateway_token,
-                    client_token: &client_token,
                     admin_token: &admin_token,
                     log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
                     log_max_mb: DEFAULT_LOG_MAX_MB,
@@ -70,8 +61,6 @@ impl ServerRuntimeSettings {
                 },
             )?;
             return Ok(Self {
-                gateway_token,
-                client_token,
                 admin_token,
                 https_port: DEFAULT_HTTPS_PORT,
                 log_retention_days: DEFAULT_LOG_RETENTION_DAYS,
@@ -81,14 +70,12 @@ impl ServerRuntimeSettings {
                 database_max_bytes: mb_to_bytes(DEFAULT_DATABASE_MAX_MB),
                 maintenance_interval_minutes: DEFAULT_MAINTENANCE_INTERVAL_MINUTES,
                 server_config_file_path,
-                is_first_start: true,
             });
         }
 
         let values = parse_key_value_file(&server_config_file_path)?;
-        let mut changed = false;
-        let gateway_token = read_or_generate_secret(&values, "gateway_token", &mut changed);
-        let client_token = read_or_generate_secret(&values, "client_token", &mut changed);
+        let mut changed =
+            values.contains_key("gateway_token") || values.contains_key("client_token");
         let admin_token = read_or_generate_secret(&values, "admin_token", &mut changed);
         let https_port = parse_u16_in_range(
             &values,
@@ -153,8 +140,6 @@ impl ServerRuntimeSettings {
                 &server_config_file_path,
                 &WritableConfig {
                     https_port,
-                    gateway_token: &gateway_token,
-                    client_token: &client_token,
                     admin_token: &admin_token,
                     log_retention_days,
                     log_max_mb,
@@ -167,8 +152,6 @@ impl ServerRuntimeSettings {
         }
 
         Ok(Self {
-            gateway_token,
-            client_token,
             admin_token,
             https_port,
             log_retention_days,
@@ -178,7 +161,6 @@ impl ServerRuntimeSettings {
             database_max_bytes: mb_to_bytes(db_max_mb),
             maintenance_interval_minutes,
             server_config_file_path,
-            is_first_start: false,
         })
     }
 }
@@ -274,8 +256,6 @@ fn parse_u16_in_range(
 
 fn write_server_config(path: &PathBuf, config: &WritableConfig<'_>) -> anyhow::Result<()> {
     let https_port = config.https_port;
-    let gateway_token = config.gateway_token;
-    let client_token = config.client_token;
     let admin_token = config.admin_token;
     let log_retention_days = config.log_retention_days;
     let log_max_mb = config.log_max_mb;
@@ -287,9 +267,7 @@ fn write_server_config(path: &PathBuf, config: &WritableConfig<'_>) -> anyhow::R
         "# RemoteMessage server.conf\n\
 # Generated on first start. Edit values and restart the service.\n\
 https_port={https_port}\n\n\
-# Segmented authentication tokens\n\
-gateway_token={gateway_token}\n\
-client_token={client_token}\n\
+# Admin token. Client and gateway tokens are generated as per-device credentials.\n\
 admin_token={admin_token}\n\n\
 # File log retention\n\
 log_retention_days={log_retention_days}\n\

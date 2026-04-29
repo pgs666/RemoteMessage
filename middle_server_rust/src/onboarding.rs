@@ -1,60 +1,86 @@
-use std::{env, fs, net::Ipv4Addr, path::Path};
+use std::{env, fs, net::Ipv4Addr, path::PathBuf};
 
 use anyhow::Context;
 use if_addrs::{IfAddr, get_if_addrs};
 use qrcode::{QrCode, render::unicode};
+use serde_json::json;
 
-use crate::{config::ServerRuntimeSettings, logger::FileLogger, runtime::runtime_directory};
+use crate::{
+    config::ServerRuntimeSettings, logger::FileLogger, models::CreatedAuthCredential,
+    runtime::runtime_directory,
+};
 
-const ONBOARDING_TEXT_FILE_NAME: &str = "onboarding-qr.txt";
-const ONBOARDING_SCRIPT_PS1: &str = "qrcode.ps1";
-const ONBOARDING_SCRIPT_BAT: &str = "qrcode.bat";
-const ONBOARDING_SCRIPT_SH: &str = "qrcode.sh";
-
-pub fn write_first_start_artifacts(
+pub fn write_credential_artifact(
     settings: &ServerRuntimeSettings,
+    credential: &CreatedAuthCredential,
     logger: &FileLogger,
-) -> anyhow::Result<()> {
-    let runtime_dir = runtime_directory();
-    let payload = build_onboarding_payload(settings);
+) -> anyhow::Result<PathBuf> {
+    let payload = build_payload(settings, credential);
     let qr_text = build_ascii_qr(&payload)?;
+    let file_name = format!("onboarding-{}-{}.txt", credential.role, credential.id);
+    let path = runtime_directory().join(file_name);
     let output = format!(
-        "RemoteMessage onboarding QR\n\
-Format: RMS1|serverBaseUrl|clientToken|gatewayToken\n\n\
-{payload}\n\n{qr_text}\n"
+        "RemoteMessage {} onboarding QR\n\
+Format: RMS2 JSON\n\
+Server: {}\n\
+Credential: {} ({})\n\
+Token: {}\n\
+Bound device: {}\n\n\
+{payload}\n\n{qr_text}\n",
+        credential.role,
+        resolve_server_base_url(settings.https_port),
+        credential.display_name,
+        credential.id,
+        credential.token,
+        credential
+            .bound_device_id
+            .as_deref()
+            .unwrap_or("<first gateway registration>"),
     );
+    fs::write(&path, output).with_context(|| format!("write {}", path.display()))?;
 
-    let onboarding_text_path = runtime_dir.join(ONBOARDING_TEXT_FILE_NAME);
-    fs::write(&onboarding_text_path, output)
-        .with_context(|| format!("write {}", onboarding_text_path.display()))?;
-    write_helper_scripts(&runtime_dir, &payload)?;
-
-    println!();
-    println!("==== RemoteMessage First-Start Onboarding QR ====");
-    println!("Scan this QR from client/gateway to auto-fill server and token:");
-    println!();
-    println!("{qr_text}");
+    println!(
+        "Generated {} onboarding QR: {}",
+        credential.role,
+        path.display()
+    );
     println!("{payload}");
-    println!("Saved: {}", onboarding_text_path.display());
-    println!("==================================================");
-    println!();
-
     logger.info(
         "Onboarding",
         format!(
-            "First-start onboarding QR generated at {}",
-            onboarding_text_path.display()
+            "{} onboarding QR generated for credential {} at {}",
+            credential.role,
+            credential.id,
+            path.display()
         ),
     );
-    Ok(())
+    Ok(path)
 }
 
-fn build_onboarding_payload(settings: &ServerRuntimeSettings) -> String {
-    let server_base_url = resolve_server_base_url(settings.https_port);
-    format!(
-        "RMS1|{}|{}|{}",
-        server_base_url, settings.client_token, settings.gateway_token
-    )
+fn build_payload(settings: &ServerRuntimeSettings, credential: &CreatedAuthCredential) -> String {
+    match credential.role.as_str() {
+        "gateway" => json!({
+            "format": "RMS2",
+            "role": "gateway",
+            "serverBaseUrl": resolve_server_base_url(settings.https_port),
+            "gatewayToken": credential.token,
+            "credentialId": credential.id,
+            "displayName": credential.display_name,
+            "boundDeviceId": credential.bound_device_id,
+            "createdAt": credential.created_at,
+        })
+        .to_string(),
+        _ => json!({
+            "format": "RMS2",
+            "role": "client",
+            "serverBaseUrl": resolve_server_base_url(settings.https_port),
+            "clientToken": credential.token,
+            "credentialId": credential.id,
+            "displayName": credential.display_name,
+            "createdAt": credential.created_at,
+        })
+        .to_string(),
+    }
 }
 
 fn resolve_server_base_url(https_port: u16) -> String {
@@ -98,41 +124,4 @@ fn is_private_ipv4(ip: Ipv4Addr) -> bool {
 fn build_ascii_qr(payload: &str) -> anyhow::Result<String> {
     let code = QrCode::new(payload.as_bytes()).context("build onboarding qr")?;
     Ok(code.render::<unicode::Dense1x2>().quiet_zone(true).build())
-}
-
-fn write_helper_scripts(runtime_dir: &Path, payload: &str) -> anyhow::Result<()> {
-    let safe_payload_for_ps1 = payload.replace('\'', "''");
-    let safe_payload_for_sh = payload.replace('\'', "'\"'\"'");
-
-    let ps1 = format!(
-        "$payload = '{safe_payload_for_ps1}'\n\
-Write-Host \"RemoteMessage onboarding payload:\"\n\
-Write-Host $payload\n\
-Write-Host \"\"\n\
-Write-Host \"If your terminal cannot render onboarding-qr.txt well,\"\n\
-Write-Host \"copy the payload above into any QR generator.\"\n"
-    );
-    let bat = format!(
-        "@echo off\n\
-set PAYLOAD={payload}\n\
-echo RemoteMessage onboarding payload:\n\
-echo %PAYLOAD%\n\
-echo.\n\
-echo If your terminal cannot render onboarding-qr.txt well,\n\
-echo copy the payload above into any QR generator.\n"
-    );
-    let sh = format!(
-        "#!/usr/bin/env sh\n\
-PAYLOAD='{safe_payload_for_sh}'\n\
-echo \"RemoteMessage onboarding payload:\"\n\
-echo \"$PAYLOAD\"\n\
-echo \"\"\n\
-echo \"If your terminal cannot render onboarding-qr.txt well,\"\n\
-echo \"copy the payload above into any QR generator.\"\n"
-    );
-
-    fs::write(runtime_dir.join(ONBOARDING_SCRIPT_PS1), ps1)?;
-    fs::write(runtime_dir.join(ONBOARDING_SCRIPT_BAT), bat)?;
-    fs::write(runtime_dir.join(ONBOARDING_SCRIPT_SH), sh)?;
-    Ok(())
 }

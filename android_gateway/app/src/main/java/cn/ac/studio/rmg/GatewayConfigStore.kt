@@ -17,7 +17,6 @@ object GatewayConfigStore {
 
     data class OnboardingQrPayload(
         val serverBaseUrl: String,
-        val clientToken: String,
         val gatewayToken: String
     )
 
@@ -108,29 +107,18 @@ object GatewayConfigStore {
         }
 
         return runCatching {
-            if (text.startsWith("{")) {
-                val json = JSONObject(text)
-                val server = json.optString("serverBaseUrl", "").trim()
-                val clientToken = json.optString("clientToken", "").trim()
-                val gatewayToken = json.optString("gatewayToken", "").trim()
-                if (server.isBlank() || clientToken.isBlank() || gatewayToken.isBlank()) {
-                    null
-                } else {
-                    OnboardingQrPayload(server, clientToken, gatewayToken)
-                }
+            if (!text.startsWith("{")) {
+                null
             } else {
-                val parts = text.split('|')
-                if (parts.size < 4 || parts[0].trim() != "RMS1") {
-                    null
+                val json = JSONObject(text)
+                val format = json.optString("format", "").trim()
+                val role = json.optString("role", "").trim()
+                val server = json.optString("serverBaseUrl", "").trim()
+                val gatewayToken = json.optString("gatewayToken", "").trim()
+                if (format == "RMS2" && role == "gateway" && server.isNotBlank() && gatewayToken.isNotBlank()) {
+                    OnboardingQrPayload(server, gatewayToken)
                 } else {
-                    val server = parts[1].trim()
-                    val clientToken = parts[2].trim()
-                    val gatewayToken = parts[3].trim()
-                    if (server.isBlank() || clientToken.isBlank() || gatewayToken.isBlank()) {
-                        null
-                    } else {
-                        OnboardingQrPayload(server, clientToken, gatewayToken)
-                    }
+                    null
                 }
             }
         }.getOrNull()

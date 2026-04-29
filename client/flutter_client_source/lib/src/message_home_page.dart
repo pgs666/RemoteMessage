@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -12,13 +12,14 @@ import 'compose_message_page.dart';
 import 'settings_page.dart';
 
 enum _ChatMessageAction { delete }
+
 class _SendMessageIntent extends Intent {
   const _SendMessageIntent();
 }
 
 class MessageHomePage extends StatefulWidget {
   final AppSettingsStore settings;
-  final ValueChanged<ThemeMode> onThemeChanged;
+  final Future<void> Function(ThemeMode) onThemeChanged;
 
   const MessageHomePage({
     super.key,
@@ -30,7 +31,8 @@ class MessageHomePage extends StatefulWidget {
   State<MessageHomePage> createState() => _MessageHomePageState();
 }
 
-class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingObserver {
+class _MessageHomePageState extends State<MessageHomePage>
+    with WidgetsBindingObserver {
   static const _autoRefreshInterval = Duration(seconds: 5);
 
   late final TextEditingController _serverCtrl;
@@ -46,10 +48,12 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
 
   bool _loading = false;
   bool _syncingNow = false;
+  Future<void>? _syncInFlight;
   String _search = '';
   String? _activePhone;
   String _activeProfileId = 'default';
   int _lastSyncTs = 0;
+  String _lastSyncId = '';
   double? _syncProgress;
   List<ConversationSummary> _conversationCache = const [];
   List<SmsItem> _activeMessageCache = const [];
@@ -58,15 +62,23 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
 
   bool _contactsLoading = false;
   bool _contactsGranted = false;
+  bool _settingsOpening = false;
   Map<String, String> _contactNameByPhoneKey = const {};
 
-  bool get _isZh => WidgetsBinding.instance.platformDispatcher.locale.languageCode.toLowerCase().startsWith('zh');
+  bool get _isZh => WidgetsBinding
+      .instance
+      .platformDispatcher
+      .locale
+      .languageCode
+      .toLowerCase()
+      .startsWith('zh');
   String tr(String zh, String en) => _isZh ? zh : en;
   bool get _showSimSelection => _gatewaySimProfiles.length > 1;
 
   String _formatErrorWithIosCertificateHint(Object error) {
     final base = error.toString();
-    if (!Platform.isIOS || !AppSettingsStore.isLikelyTlsCertificateIssue(error)) {
+    if (!Platform.isIOS ||
+        !AppSettingsStore.isLikelyTlsCertificateIssue(error)) {
       return base;
     }
     return '$base\n${AppSettingsStore.iosSystemCertificateHint(isZh: _isZh)}';
@@ -109,7 +121,9 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     _deviceCtrl.dispose();
     _searchCtrl.dispose();
     _composerCtrl.dispose();
-    _db?.close();
+    final db = _db;
+    _db = null;
+    unawaited(db?.close() ?? Future<void>.value());
     super.dispose();
   }
 
@@ -125,7 +139,9 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
       if (_contactNameByPhoneKey.isEmpty) {
         _loadContacts();
       }
-    } else if (state == AppLifecycleState.inactive || state == AppLifecycleState.paused || state == AppLifecycleState.detached) {
+    } else if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused ||
+        state == AppLifecycleState.detached) {
       _stopAutoRefresh();
     }
   }
@@ -133,7 +149,7 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
   void _startAutoRefresh() {
     if (_autoRefreshTimer != null) return;
     _autoRefreshTimer = Timer.periodic(_autoRefreshInterval, (_) async {
-      if (!mounted || _syncingNow) return;
+      if (!mounted || _syncingNow || _syncInFlight != null) return;
       await _syncInbox(fullSync: false, interactive: false);
     });
   }
@@ -143,29 +159,68 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     _autoRefreshTimer = null;
   }
 
+  Future<void> _waitForCurrentSyncToFinish() async {
+    while (true) {
+      final pending = _syncInFlight;
+      if (pending == null) return;
+      try {
+        await pending;
+      } catch (_) {
+        // The caller only needs the in-flight sync to stop touching the DB.
+      }
+    }
+  }
+
   Future<void> _bootstrap() async {
     setState(() {
       _loading = true;
       _syncProgress = null;
     });
 
-    await widget.settings.load();
-    _activeProfileId = widget.settings.activeProfileId;
-    _serverCtrl.text = widget.settings.serverBaseUrl;
-    _deviceCtrl.text = widget.settings.deviceId;
+    try {
+      await widget.settings.load();
+      _activeProfileId = widget.settings.activeProfileId;
+      _serverCtrl.text = widget.settings.serverBaseUrl;
+      _deviceCtrl.text = widget.settings.deviceId;
+      final settingsWarning = widget.settings.settingsLoadWarning;
+      if (settingsWarning != null && settingsWarning.trim().isNotEmpty) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          unawaited(
+            _showToastStatus(
+              '${tr('设置读取异常', 'Settings load warning')}: $settingsWarning',
+              error: true,
+            ),
+          );
+        });
+      }
 
-    await _openLocalDbForProfile(_activeProfileId, clearUiFirst: false);
-    await _refreshGatewaySimProfiles(interactive: false);
-    await _loadContacts();
-    await _syncInbox(fullSync: true, interactive: true);
-    _startAutoRefresh();
-
-    if (mounted) {
-      setState(() => _loading = false);
+      await _openLocalDbForProfile(_activeProfileId, clearUiFirst: false);
+      await _refreshGatewaySimProfiles(interactive: false);
+      await _loadContacts();
+      await _syncInbox(fullSync: true, interactive: true);
+      _startAutoRefresh();
+    } catch (e) {
+      if (mounted) {
+        await _showToastStatus(
+          '${tr('启动失败', 'Startup failed')}: ${_formatErrorWithIosCertificateHint(e)}',
+          error: true,
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _loading = false;
+          _syncProgress = null;
+        });
+      }
     }
   }
 
-  Future<void> _openLocalDbForProfile(String profileId, {required bool clearUiFirst}) async {
+  Future<void> _openLocalDbForProfile(
+    String profileId, {
+    required bool clearUiFirst,
+  }) async {
     if (clearUiFirst && mounted) {
       setState(() {
         _conversationCache = const [];
@@ -175,13 +230,16 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
       });
     }
 
-    await _db?.close();
+    final oldDb = _db;
+    _db = null;
+    await oldDb?.close();
     final nextDb = LocalDatabase(profileId: profileId);
     await nextDb.init();
     _db = nextDb;
     _activeProfileId = profileId;
 
     _lastSyncTs = await _localDb.getMetaInt('lastSyncTs') ?? 0;
+    _lastSyncId = await _localDb.getMetaString('lastSyncId') ?? '';
     _activePhone = await _localDb.getMetaString('activePhone');
     _selectedSendSimSlot = await _localDb.getMetaInt('selectedSendSimSlot');
     await _refreshLocalCaches();
@@ -196,22 +254,36 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
         behavior: SnackBarBehavior.floating,
         margin: const EdgeInsets.fromLTRB(12, 0, 12, 88),
         duration: const Duration(seconds: 2),
-        backgroundColor: error ? Theme.of(context).colorScheme.error : Theme.of(context).colorScheme.inverseSurface,
+        backgroundColor: error
+            ? Theme.of(context).colorScheme.error
+            : Theme.of(context).colorScheme.inverseSurface,
         content: Text(
           text,
-          style: TextStyle(color: error ? Theme.of(context).colorScheme.onError : Theme.of(context).colorScheme.onInverseSurface),
+          style: TextStyle(
+            color: error
+                ? Theme.of(context).colorScheme.onError
+                : Theme.of(context).colorScheme.onInverseSurface,
+          ),
         ),
       ),
     );
   }
 
   Future<void> _refreshLocalCaches() async {
-    if (_db == null) return;
-    final conversations = await _localDb.getConversationSummaries(search: _search);
+    final db = _db;
+    if (db == null) return;
+    final deviceId = _deviceCtrl.text.trim();
+    final conversations = await db.getConversationSummaries(
+      search: _search,
+      deviceId: deviceId.isEmpty ? null : deviceId,
+    );
+    if (!mounted || _db != db) return;
     var nextActivePhone = _activePhone;
 
     if (conversations.isNotEmpty) {
-      final stillExists = nextActivePhone != null && conversations.any((c) => c.phone == nextActivePhone);
+      final stillExists =
+          nextActivePhone != null &&
+          conversations.any((c) => c.phone == nextActivePhone);
       if (!stillExists) {
         nextActivePhone = conversations.first.phone;
       }
@@ -222,12 +294,18 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     if (nextActivePhone != _activePhone) {
       _activePhone = nextActivePhone;
       if (_activePhone != null) {
-        await _localDb.setMetaString('activePhone', _activePhone!);
+        await db.setMetaString('activePhone', _activePhone!);
+        if (!mounted || _db != db) return;
       }
     }
 
-    final messages = _activePhone == null ? const <SmsItem>[] : await _localDb.getMessagesByPhone(_activePhone!);
-    if (!mounted) return;
+    final messages = _activePhone == null
+        ? const <SmsItem>[]
+        : await db.getMessagesByPhone(
+            _activePhone!,
+            deviceId: deviceId.isEmpty ? null : deviceId,
+          );
+    if (!mounted || _db != db) return;
 
     setState(() {
       _conversationCache = conversations;
@@ -238,10 +316,11 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
   }
 
   Future<void> _setActivePhone(String? phone) async {
-    if (_db == null) return;
+    final db = _db;
+    if (db == null) return;
     _activePhone = phone;
     if (phone != null) {
-      await _localDb.setMetaString('activePhone', phone);
+      await db.setMetaString('activePhone', phone);
     }
     await _refreshLocalCaches();
   }
@@ -258,7 +337,122 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
   }
 
   Future<void> _openSettings() async {
-    final result = await Navigator.push<SettingsResult>(
+    if (_settingsOpening) return;
+    _settingsOpening = true;
+    _stopAutoRefresh();
+    try {
+      await _waitForCurrentSyncToFinish();
+      await widget.settings.load();
+    } catch (e) {
+      _settingsOpening = false;
+      _startAutoRefresh();
+      if (mounted) {
+        await _showToastStatus(
+          '${tr('读取设置失败', 'Failed to load settings')}: ${_formatErrorWithIosCertificateHint(e)}',
+          error: true,
+        );
+      }
+      return;
+    }
+    if (!mounted) {
+      _settingsOpening = false;
+      return;
+    }
+
+    try {
+      final oldDb = _db;
+      _db = null;
+      await oldDb?.close();
+    } catch (_) {
+      // The settings page owns no local-message DB work; reopen after it closes.
+    }
+
+    SettingsResult? result;
+    try {
+      result = await _pushSettingsPage();
+    } finally {
+      _settingsOpening = false;
+    }
+    if (!mounted) return;
+
+    if (result == null) {
+      try {
+        await _openLocalDbForProfile(_activeProfileId, clearUiFirst: false);
+      } catch (e) {
+        await _showToastStatus(
+          '${tr('打开本地数据库失败', 'Failed to open local database')}: ${_formatErrorWithIosCertificateHint(e)}',
+          error: true,
+        );
+        return;
+      } finally {
+        _startAutoRefresh();
+      }
+      return;
+    }
+
+    _serverCtrl.text = result.serverBaseUrl;
+    _deviceCtrl.text = result.deviceId;
+    widget.settings.serverBaseUrl = result.serverBaseUrl;
+    widget.settings.deviceId = result.deviceId;
+    widget.settings.password = result.password;
+    widget.settings.androidLauncherIconMode = result.androidLauncherIconMode;
+    try {
+      await widget.onThemeChanged(result.themeMode);
+    } catch (e) {
+      await _showToastStatus(
+        '${tr('保存主题失败', 'Failed to save theme')}: $e',
+        error: true,
+      );
+    }
+    await AndroidLauncherIconService.applyMode(result.androidLauncherIconMode);
+
+    final profileChanged = result.activeProfileId != _activeProfileId;
+    if (profileChanged) {
+      _searchCtrl.clear();
+      _search = '';
+    }
+    try {
+      await _openLocalDbForProfile(
+        result.activeProfileId,
+        clearUiFirst: profileChanged,
+      );
+    } catch (e) {
+      await _showToastStatus(
+        '${tr('打开本地数据库失败', 'Failed to open local database')}: ${_formatErrorWithIosCertificateHint(e)}',
+        error: true,
+      );
+      _startAutoRefresh();
+      return;
+    }
+    if (profileChanged) {
+      await _showToastStatus(
+        tr(
+          '已切换配置，正在加载对应短信...',
+          'Profile switched. Loading profile messages...',
+        ),
+      );
+    }
+
+    await _refreshGatewaySimProfiles(interactive: false);
+
+    if (result.clearLocalDatabase) {
+      try {
+        await _clearLocalDatabase();
+      } finally {
+        _startAutoRefresh();
+      }
+      return;
+    }
+
+    try {
+      await _syncInbox(fullSync: true, interactive: true);
+    } finally {
+      _startAutoRefresh();
+    }
+  }
+
+  Future<SettingsResult?> _pushSettingsPage() {
+    return Navigator.push<SettingsResult>(
       context,
       MaterialPageRoute(
         builder: (_) => SettingsPage(
@@ -267,49 +461,27 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
         ),
       ),
     );
-    if (result == null) return;
-
-    _serverCtrl.text = result.serverBaseUrl;
-    _deviceCtrl.text = result.deviceId;
-    widget.settings.serverBaseUrl = result.serverBaseUrl;
-    widget.settings.deviceId = result.deviceId;
-    widget.settings.password = result.password;
-    widget.settings.androidLauncherIconMode = result.androidLauncherIconMode;
-    widget.onThemeChanged(result.themeMode);
-    await AndroidLauncherIconService.applyMode(result.androidLauncherIconMode);
-
-    final profileChanged = result.activeProfileId != _activeProfileId;
-    if (profileChanged) {
-      _searchCtrl.clear();
-      _search = '';
-      await _openLocalDbForProfile(result.activeProfileId, clearUiFirst: true);
-      await _showToastStatus(tr('已切换配置，正在加载对应短信...', 'Profile switched. Loading profile messages...'));
-    }
-
-    await _refreshGatewaySimProfiles(interactive: false);
-
-    if (result.clearLocalDatabase) {
-      await _clearLocalDatabase();
-      return;
-    }
-
-    await _syncInbox(fullSync: true, interactive: true);
   }
 
   Future<void> _clearLocalDatabase() async {
-    if (!mounted || _db == null) return;
+    final db = _db;
+    if (!mounted || db == null) return;
     setState(() {
       _loading = true;
       _syncProgress = null;
     });
 
     try {
-      await _localDb.clearAllUserData();
+      await db.clearAllUserData();
+      if (!mounted || _db != db) return;
       _lastSyncTs = 0;
+      _lastSyncId = '';
       _activePhone = null;
-      _selectedSendSimSlot = _gatewaySimProfiles.isNotEmpty ? _gatewaySimProfiles.first.slotIndex : null;
+      _selectedSendSimSlot = _gatewaySimProfiles.isNotEmpty
+          ? _gatewaySimProfiles.first.slotIndex
+          : null;
       if (_selectedSendSimSlot != null) {
-        await _localDb.setMetaInt('selectedSendSimSlot', _selectedSendSimSlot!);
+        await db.setMetaInt('selectedSendSimSlot', _selectedSendSimSlot!);
       }
       await _refreshLocalCaches();
       if (!mounted) return;
@@ -328,16 +500,20 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     final server = _serverCtrl.text.trim();
     final device = _deviceCtrl.text.trim();
     if (server.isEmpty || device.isEmpty) return;
+    final db = _db;
 
     try {
       final response = await _getJson(
-        Uri.parse('$server/api/client/device-sims?deviceId=${Uri.encodeQueryComponent(device)}'),
+        Uri.parse(
+          '$server/api/client/device-sims?deviceId=${Uri.encodeQueryComponent(device)}',
+        ),
         password: widget.settings.password,
       );
-      final list = (jsonDecode(response) as List)
-          .map((e) => DeviceSimProfile.fromJson(e as Map<String, dynamic>))
-          .toList()
-        ..sort((a, b) => a.slotIndex.compareTo(b.slotIndex));
+      final list =
+          (jsonDecode(response) as List)
+              .map((e) => DeviceSimProfile.fromJson(e as Map<String, dynamic>))
+              .toList()
+            ..sort((a, b) => a.slotIndex.compareTo(b.slotIndex));
 
       final allowedSlotIndexes = list.map((e) => e.slotIndex).toSet();
       int? selected = _selectedSendSimSlot;
@@ -348,8 +524,8 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
         selected = list.first.slotIndex;
       }
       _selectedSendSimSlot = selected;
-      if (selected != null && _db != null) {
-        await _localDb.setMetaInt('selectedSendSimSlot', selected);
+      if (selected != null && db != null && _db == db) {
+        await db.setMetaInt('selectedSendSimSlot', selected);
       }
 
       if (!mounted) return;
@@ -366,11 +542,46 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     }
   }
 
-  Future<void> _syncInbox({bool fullSync = false, bool interactive = true}) async {
-    if (_syncingNow || _db == null) return;
+  Future<void> _syncInbox({
+    bool fullSync = false,
+    bool interactive = true,
+  }) async {
+    final pending = _syncInFlight;
+    if (pending != null) {
+      if (interactive) {
+        try {
+          await pending;
+        } catch (_) {
+          // The running sync already reported its interactive error if needed.
+        }
+      }
+      return;
+    }
+
+    final current = _syncInboxInternal(
+      fullSync: fullSync,
+      interactive: interactive,
+    );
+    _syncInFlight = current;
+    try {
+      await current;
+    } finally {
+      if (identical(_syncInFlight, current)) {
+        _syncInFlight = null;
+      }
+    }
+  }
+
+  Future<void> _syncInboxInternal({
+    required bool fullSync,
+    required bool interactive,
+  }) async {
+    final db = _db;
+    if (_settingsOpening || db == null) return;
 
     final server = _serverCtrl.text.trim();
-    if (server.isEmpty) return;
+    final device = _deviceCtrl.text.trim();
+    if (server.isEmpty || device.isEmpty) return;
 
     _syncingNow = true;
     if (interactive && mounted) {
@@ -381,35 +592,79 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     }
 
     try {
-      final since = fullSync ? 0 : _lastSyncTs;
-      final url = Uri.parse('$server/api/client/inbox?sinceTs=$since&limit=10000');
-      final response = await _getJson(url, password: widget.settings.password);
-      final list = (jsonDecode(response) as List).map((e) => SmsItem.fromJson(e as Map<String, dynamic>)).toList();
+      const pageLimit = 1000;
+      var cursorTs = fullSync ? 0 : _lastSyncTs;
+      var cursorId = fullSync ? '' : _lastSyncId;
+      var addedTotal = 0;
+      var pageCount = 0;
 
-      await _refreshGatewaySimProfiles(interactive: false);
+      while (!_settingsOpening && mounted && _db == db) {
+        final url = Uri.parse(
+          '$server/api/client/inbox'
+          '?deviceId=${Uri.encodeQueryComponent(device)}'
+          '&sinceTs=$cursorTs'
+          '&afterId=${Uri.encodeQueryComponent(cursorId)}'
+          '&limit=$pageLimit',
+        );
+        final response = await _getJson(
+          url,
+          password: widget.settings.password,
+        );
+        final list = (jsonDecode(response) as List)
+            .map((e) => SmsItem.fromJson(e as Map<String, dynamic>))
+            .where((e) => e.deviceId == device)
+            .toList();
 
-      final added = await _localDb.upsertMessages(
-        list,
-        onProgress: interactive
-            ? (done, total) {
-                if (!mounted) return;
-                setState(() {
-                  _syncProgress = total <= 0 ? 1 : 0.1 + ((done / total) * 0.75);
-                });
-              }
-            : null,
-      );
+        if (_settingsOpening || _db != db) return;
+        if (list.isEmpty) break;
 
-      for (final item in list) {
-        final cursorTs = item.syncCursorTs;
-        if (cursorTs > _lastSyncTs) _lastSyncTs = cursorTs;
+        pageCount++;
+        final added = await db.upsertMessages(
+          list,
+          onProgress: interactive
+              ? (done, total) {
+                  if (!mounted || _db != db) return;
+                  setState(() {
+                    final pageProgress = total <= 0 ? 1.0 : done / total;
+                    _syncProgress = 0.1 + (pageProgress * 0.75);
+                  });
+                }
+              : null,
+        );
+        addedTotal += added;
+
+        final last = list.reduce((a, b) {
+          final cursorCompare = a.syncCursorTs.compareTo(b.syncCursorTs);
+          if (cursorCompare != 0) return cursorCompare > 0 ? a : b;
+          return a.id.compareTo(b.id) >= 0 ? a : b;
+        });
+        final nextCursorTs = last.syncCursorTs;
+        final nextCursorId = last.id;
+        if (nextCursorTs == cursorTs && nextCursorId == cursorId) {
+          throw StateError('Sync cursor did not advance.');
+        }
+        cursorTs = nextCursorTs;
+        cursorId = nextCursorId;
+        _lastSyncTs = cursorTs;
+        _lastSyncId = cursorId;
+        await db.setMetaInt('lastSyncTs', _lastSyncTs);
+        await db.setMetaString('lastSyncId', _lastSyncId);
+
+        if (list.length < pageLimit) break;
       }
-      await _localDb.setMetaInt('lastSyncTs', _lastSyncTs);
+
+      if (_settingsOpening || _db != db) return;
+      await _refreshGatewaySimProfiles(interactive: false);
+      if (_settingsOpening || _db != db) return;
       await _refreshLocalCaches();
 
       if (interactive && mounted) {
-        final text = added > 0 ? '${tr('同步完成', 'Sync done')}, +$added' : tr('同步完成，没有新消息', 'Sync done, no new messages');
-        await _showToastStatus(text);
+        final text = addedTotal > 0
+            ? '${tr('同步完成', 'Sync done')}, +$addedTotal'
+            : tr('同步完成，没有新消息', 'Sync done, no new messages');
+        await _showToastStatus(
+          pageCount > 1 ? '$text (${tr('分页', 'pages')}: $pageCount)' : text,
+        );
       }
     } catch (e) {
       if (!mounted) return;
@@ -431,21 +686,25 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
   }
 
   Future<void> _setPin(String phone, bool pin) async {
-    if (_db == null) return;
-    await _localDb.setPinned(phone, pin);
+    final db = _db;
+    if (db == null) return;
+    await db.setPinned(phone, pin);
     await _refreshLocalCaches();
     try {
       final server = _serverCtrl.text.trim();
-      await _postJson(Uri.parse('$server/api/client/conversations/pin'), {
-        'phone': phone,
-        'pinned': pin,
-      }, password: widget.settings.password);
+      await _postJson(
+        Uri.parse('$server/api/client/conversations/pin'),
+        {'phone': phone, 'pinned': pin},
+        password: widget.settings.password,
+      );
     } catch (_) {
       // keep local pin even if remote call fails
     }
   }
 
-  Future<void> _showConversationActions(ConversationSummary conversation) async {
+  Future<void> _showConversationActions(
+    ConversationSummary conversation,
+  ) async {
     final nextPinned = await showModalBottomSheet<bool>(
       context: context,
       builder: (sheetContext) {
@@ -453,8 +712,16 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
           child: Wrap(
             children: [
               ListTile(
-                leading: Icon(conversation.pinned ? Icons.push_pin_outlined : Icons.push_pin),
-                title: Text(conversation.pinned ? tr('取消置顶', 'Unpin conversation') : tr('置顶会话', 'Pin conversation')),
+                leading: Icon(
+                  conversation.pinned
+                      ? Icons.push_pin_outlined
+                      : Icons.push_pin,
+                ),
+                title: Text(
+                  conversation.pinned
+                      ? tr('取消置顶', 'Unpin conversation')
+                      : tr('置顶会话', 'Pin conversation'),
+                ),
                 onTap: () => Navigator.pop(sheetContext, !conversation.pinned),
               ),
               ListTile(
@@ -481,7 +748,8 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
               ListTile(
                 leading: const Icon(Icons.delete_outline),
                 title: Text(tr('删除短信', 'Delete message')),
-                onTap: () => Navigator.pop(sheetContext, _ChatMessageAction.delete),
+                onTap: () =>
+                    Navigator.pop(sheetContext, _ChatMessageAction.delete),
               ),
               ListTile(
                 leading: const Icon(Icons.close),
@@ -495,13 +763,23 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     );
     if (action != _ChatMessageAction.delete) return;
 
-    final confirmed = await showDialog<bool>(
+    final confirmed = await _confirmDeleteMessageDialog();
+
+    if (confirmed != true) return;
+    await _deleteMessage(item);
+  }
+
+  Future<bool?> _confirmDeleteMessageDialog() {
+    return showDialog<bool>(
       context: context,
       builder: (dialogContext) {
         return AlertDialog(
           title: Text(tr('删除短信', 'Delete message')),
           content: Text(
-            tr('确定删除这条短信吗？删除后将不会在本客户端再次显示。', 'Delete this message? It will no longer appear on this client.'),
+            tr(
+              '确定删除这条短信吗？删除后将不会在本客户端再次显示。',
+              'Delete this message? It will no longer appear on this client.',
+            ),
           ),
           actions: [
             TextButton(
@@ -516,15 +794,13 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
         );
       },
     );
-
-    if (confirmed != true) return;
-    await _deleteMessage(item);
   }
 
   Future<void> _deleteMessage(SmsItem item) async {
-    if (_db == null) return;
+    final db = _db;
+    if (db == null) return;
     try {
-      final deleted = await _localDb.deleteMessageById(item.id);
+      final deleted = await db.deleteMessageById(item.id);
       if (!deleted) {
         if (!mounted) return;
         await _showToastStatus(tr('短信不存在或已删除', 'Message already removed'));
@@ -545,7 +821,13 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     final phone = _activePhone?.trim() ?? '';
     final content = _composerCtrl.text.trim();
     if (server.isEmpty || device.isEmpty || phone.isEmpty || content.isEmpty) {
-      await _showToastStatus(tr('请先配置服务端并选择会话', 'Please configure server/device and choose conversation'), error: true);
+      await _showToastStatus(
+        tr(
+          '请先配置服务端并选择会话',
+          'Please configure server/device and choose conversation',
+        ),
+        error: true,
+      );
       return;
     }
 
@@ -595,14 +877,16 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
         selected = null;
       }
       _selectedSendSimSlot = selected;
-      if (selected != null && _db != null) {
-        await _localDb.setMetaInt('selectedSendSimSlot', selected);
+      final db = _db;
+      if (selected != null && db != null) {
+        await db.setMetaInt('selectedSendSimSlot', selected);
       }
     }
 
     _activePhone = draft.phone;
-    if (_db != null) {
-      await _localDb.setMetaString('activePhone', draft.phone);
+    final db = _db;
+    if (db != null) {
+      await db.setMetaString('activePhone', draft.phone);
     }
     _composerCtrl.text = draft.message;
     await _sendSmsToActive();
@@ -627,7 +911,11 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     }
   }
 
-  Future<void> _postJson(Uri url, Map<String, dynamic> data, {String? password}) async {
+  Future<void> _postJson(
+    Uri url,
+    Map<String, dynamic> data, {
+    String? password,
+  }) async {
     final client = await widget.settings.createHttpClient(url, isZh: _isZh);
     try {
       final req = await client.postUrl(url);
@@ -653,8 +941,12 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
 
     _contactsLoading = true;
     try {
-      final status = await FlutterContacts.permissions.request(PermissionType.read);
-      final granted = status == PermissionStatus.granted || status == PermissionStatus.limited;
+      final status = await FlutterContacts.permissions.request(
+        PermissionType.read,
+      );
+      final granted =
+          status == PermissionStatus.granted ||
+          status == PermissionStatus.limited;
       if (!granted) {
         if (!mounted) return;
         setState(() {
@@ -664,7 +956,9 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
         return;
       }
 
-      final contacts = await FlutterContacts.getAll(properties: {ContactProperty.phone});
+      final contacts = await FlutterContacts.getAll(
+        properties: {ContactProperty.phone},
+      );
       final map = <String, String>{};
       for (final c in contacts) {
         final name = c.displayName?.trim() ?? '';
@@ -731,7 +1025,7 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
   Widget _buildConversationList({required bool openChatOnTap}) {
     return ValueListenableBuilder<int>(
       valueListenable: _uiRefreshTick,
-      builder: (context, _, __) {
+      builder: (context, unused, child) {
         final data = _conversationCache;
         if (data.isEmpty) {
           return RefreshIndicator(
@@ -739,7 +1033,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
             child: ListView(
               physics: const AlwaysScrollableScrollPhysics(),
               children: [
-                SizedBox(height: 320, child: Center(child: Text(tr('暂无会话', 'No conversations')))),
+                SizedBox(
+                  height: 320,
+                  child: Center(child: Text(tr('暂无会话', 'No conversations'))),
+                ),
               ],
             ),
           );
@@ -757,15 +1054,21 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                 onSecondaryTap: () => _showConversationActions(c),
                 child: ListTile(
                   selected: selected,
-                  leading: c.pinned ? const Icon(Icons.push_pin, size: 18) : null,
-                  title: Text(_displayConversationTitle(c.phone), maxLines: 1, overflow: TextOverflow.ellipsis),
+                  leading: c.pinned
+                      ? const Icon(Icons.push_pin, size: 18)
+                      : null,
+                  title: Text(
+                    _displayConversationTitle(c.phone),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
                   subtitle: Text(
                     (() {
                       final simLabel = _simLabelForMessage(c.lastMessage);
                       final statusLabel = _messageStatusPrefix(c.lastMessage);
                       final parts = <String>[
-                        if (simLabel != null) simLabel,
-                        if (statusLabel != null) statusLabel,
+                        ?simLabel,
+                        ?statusLabel,
                         c.lastMessage.content,
                       ];
                       return parts.join(' | ');
@@ -778,7 +1081,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                     if (openChatOnTap && context.mounted) {
                       await Navigator.push(
                         context,
-                        MaterialPageRoute(builder: (_) => MobileChatPage(parent: this, phone: c.phone)),
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              _MobileChatPage(parent: this, phone: c.phone),
+                        ),
                       );
                     }
                   },
@@ -822,24 +1128,34 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
   }
 
   Widget _buildSimSelectorInComposer() {
-    final label = _selectedSendSimSlot == null ? tr('发卡', 'SIM') : _displaySimLabel(_selectedSendSimSlot!);
+    final label = _selectedSendSimSlot == null
+        ? tr('发卡', 'SIM')
+        : _displaySimLabel(_selectedSendSimSlot!);
     return PopupMenuButton<int>(
       initialValue: _selectedSendSimSlot,
       onSelected: (value) async {
         setState(() => _selectedSendSimSlot = value);
-        if (_db != null) {
-          await _localDb.setMetaInt('selectedSendSimSlot', value);
+        final db = _db;
+        if (db != null) {
+          await db.setMetaInt('selectedSendSimSlot', value);
         }
       },
       itemBuilder: (_) => _gatewaySimProfiles
-          .map((sim) => PopupMenuItem<int>(value: sim.slotIndex, child: Text(_displaySimLabel(sim.slotIndex))))
+          .map(
+            (sim) => PopupMenuItem<int>(
+              value: sim.slotIndex,
+              child: Text(_displaySimLabel(sim.slotIndex)),
+            ),
+          )
           .toList(),
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
         margin: const EdgeInsets.only(right: 4),
         decoration: BoxDecoration(
           color: Theme.of(context).colorScheme.surfaceContainerHigh,
-          border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+          border: Border.all(
+            color: Theme.of(context).colorScheme.outlineVariant,
+          ),
           borderRadius: BorderRadius.circular(999),
         ),
         child: Row(
@@ -861,7 +1177,9 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
           width: double.infinity,
           padding: const EdgeInsets.all(12),
           child: Text(
-            _activePhone == null ? tr('请选择会话', 'Select conversation') : _displayConversationTitle(_activePhone!),
+            _activePhone == null
+                ? tr('请选择会话', 'Select conversation')
+                : _displayConversationTitle(_activePhone!),
             maxLines: 1,
             overflow: TextOverflow.ellipsis,
           ),
@@ -870,12 +1188,15 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
         Expanded(
           child: ValueListenableBuilder<int>(
             valueListenable: _uiRefreshTick,
-            builder: (context, _, __) {
+            builder: (context, unused, child) {
               final messages = _activeMessageCache;
-              if (messages.isEmpty) return Center(child: Text(tr('暂无消息', 'No messages')));
+              if (messages.isEmpty) {
+                return Center(child: Text(tr('暂无消息', 'No messages')));
+              }
               return ListView.builder(
                 controller: _chatScrollCtrl,
-                keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                keyboardDismissBehavior:
+                    ScrollViewKeyboardDismissBehavior.onDrag,
                 padding: const EdgeInsets.symmetric(vertical: 8),
                 itemCount: messages.length,
                 itemBuilder: (context, index) {
@@ -884,23 +1205,37 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                   final simLabel = _simLabelForMessage(m);
                   final statusLine = _messageStatusLine(m);
                   return Align(
-                    alignment: mine ? Alignment.centerRight : Alignment.centerLeft,
+                    alignment: mine
+                        ? Alignment.centerRight
+                        : Alignment.centerLeft,
                     child: GestureDetector(
                       onLongPress: () => _showMessageActions(m),
                       onSecondaryTap: () => _showMessageActions(m),
                       child: Container(
-                        margin: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                        margin: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 6,
+                        ),
                         padding: const EdgeInsets.all(10),
                         constraints: const BoxConstraints(maxWidth: 460),
                         decoration: BoxDecoration(
-                          color: mine ? Theme.of(context).colorScheme.primaryContainer : Theme.of(context).colorScheme.surfaceContainerHighest,
+                          color: mine
+                              ? Theme.of(context).colorScheme.primaryContainer
+                              : Theme.of(
+                                  context,
+                                ).colorScheme.surfaceContainerHighest,
                           borderRadius: BorderRadius.circular(16),
                         ),
                         child: Column(
-                          crossAxisAlignment: mine ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+                          crossAxisAlignment: mine
+                              ? CrossAxisAlignment.end
+                              : CrossAxisAlignment.start,
                           children: [
                             if (simLabel != null) ...[
-                              Text(simLabel, style: Theme.of(context).textTheme.labelSmall),
+                              Text(
+                                simLabel,
+                                style: Theme.of(context).textTheme.labelSmall,
+                              ),
                               const SizedBox(height: 4),
                             ],
                             Text(m.content),
@@ -908,10 +1243,13 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                               const SizedBox(height: 4),
                               Text(
                                 statusLine,
-                                style: Theme.of(context).textTheme.labelSmall?.copyWith(
+                                style: Theme.of(context).textTheme.labelSmall
+                                    ?.copyWith(
                                       color: m.sendStatus == 'failed'
                                           ? Theme.of(context).colorScheme.error
-                                          : Theme.of(context).textTheme.labelSmall?.color,
+                                          : Theme.of(
+                                              context,
+                                            ).textTheme.labelSmall?.color,
                                     ),
                               ),
                             ],
@@ -946,8 +1284,13 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                     decoration: InputDecoration(
                       hintText: tr('输入消息...', 'Type a message...'),
                       filled: true,
-                      fillColor: Theme.of(context).colorScheme.surfaceContainerHigh,
-                      contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                      fillColor: Theme.of(
+                        context,
+                      ).colorScheme.surfaceContainerHigh,
+                      contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 16,
+                        vertical: 12,
+                      ),
                       border: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(999),
                         borderSide: BorderSide.none,
@@ -958,10 +1301,18 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                       ),
                       focusedBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(999),
-                        borderSide: BorderSide(color: Theme.of(context).colorScheme.primary, width: 1.4),
+                        borderSide: BorderSide(
+                          color: Theme.of(context).colorScheme.primary,
+                          width: 1.4,
+                        ),
                       ),
-                      suffixIcon: _showSimSelection ? _buildSimSelectorInComposer() : null,
-                      suffixIconConstraints: const BoxConstraints(minWidth: 72, maxWidth: 140),
+                      suffixIcon: _showSimSelection
+                          ? _buildSimSelectorInComposer()
+                          : null,
+                      suffixIconConstraints: const BoxConstraints(
+                        minWidth: 72,
+                        maxWidth: 140,
+                      ),
                     ),
                     onTap: _scrollChatToBottomSoon,
                   ),
@@ -969,7 +1320,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                 const SizedBox(width: 8),
                 FilledButton(
                   onPressed: _loading ? null : _sendSmsToActive,
-                  style: FilledButton.styleFrom(shape: const CircleBorder(), padding: const EdgeInsets.all(14)),
+                  style: FilledButton.styleFrom(
+                    shape: const CircleBorder(),
+                    padding: const EdgeInsets.all(14),
+                  ),
                   child: const Icon(Icons.send),
                 ),
               ],
@@ -986,11 +1340,14 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
 
   String? _simLabelForMessage(SmsItem item) {
     final targetSimPhone = item.simPhoneNumber?.trim();
-    final inferredSlotIndex = item.simSlotIndex ??
+    final inferredSlotIndex =
+        item.simSlotIndex ??
         _gatewaySimProfiles
             .where((sim) {
               final candidatePhone = sim.phoneNumber?.trim();
-              return candidatePhone != null && candidatePhone.isNotEmpty && candidatePhone == targetSimPhone;
+              return candidatePhone != null &&
+                  candidatePhone.isNotEmpty &&
+                  candidatePhone == targetSimPhone;
             })
             .map((sim) => sim.slotIndex)
             .cast<int?>()
@@ -1062,7 +1419,8 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     if (!dt.isBefore(todayStart) && dt.isBefore(tomorrowStart)) {
       return MaterialLocalizations.of(context).formatTimeOfDay(
         TimeOfDay.fromDateTime(dt),
-        alwaysUse24HourFormat: MediaQuery.maybeOf(context)?.alwaysUse24HourFormat ?? false,
+        alwaysUse24HourFormat:
+            MediaQuery.maybeOf(context)?.alwaysUse24HourFormat ?? false,
       );
     }
 
@@ -1070,7 +1428,9 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
       return _isZh ? '${dt.month}月${dt.day}日' : '${dt.month}/${dt.day}';
     }
 
-    return _isZh ? '${dt.year}年${dt.month}月${dt.day}日' : '${dt.year}/${dt.month}/${dt.day}';
+    return _isZh
+        ? '${dt.year}年${dt.month}月${dt.day}日'
+        : '${dt.year}/${dt.month}/${dt.day}';
   }
 
   @override
@@ -1078,8 +1438,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
     final isMobileScreen = MediaQuery.sizeOf(context).width < 900;
     return Shortcuts(
       shortcuts: <ShortcutActivator, Intent>{
-        const SingleActivator(LogicalKeyboardKey.keyN, control: true): const ActivateIntent(),
-        const SingleActivator(LogicalKeyboardKey.enter, control: true): const _SendMessageIntent(),
+        const SingleActivator(LogicalKeyboardKey.keyN, control: true):
+            const ActivateIntent(),
+        const SingleActivator(LogicalKeyboardKey.enter, control: true):
+            const _SendMessageIntent(),
       },
       child: Actions(
         actions: <Type, Action<Intent>>{
@@ -1105,7 +1467,7 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
             title: const Text('RemoteMessage'),
             actions: [
               IconButton(
-                onPressed: _loading ? null : _openSettings,
+                onPressed: _openSettings,
                 icon: const Icon(Icons.settings),
                 tooltip: tr('设置', 'Settings'),
               ),
@@ -1136,7 +1498,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                   child: Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      tr('联系人权限未开启，列表将显示号码。', 'Contacts permission is off, phone numbers will be shown.'),
+                      tr(
+                        '联系人权限未开启，列表将显示号码。',
+                        'Contacts permission is off, phone numbers will be shown.',
+                      ),
                       style: Theme.of(context).textTheme.bodySmall,
                     ),
                   ),
@@ -1150,7 +1515,10 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
                     }
                     return Row(
                       children: [
-                        SizedBox(width: 320, child: _buildDesktopConversationPane()),
+                        SizedBox(
+                          width: 320,
+                          child: _buildDesktopConversationPane(),
+                        ),
                         const VerticalDivider(width: 1),
                         Expanded(child: _buildChatPanel()),
                       ],
@@ -1174,17 +1542,17 @@ class _MessageHomePageState extends State<MessageHomePage> with WidgetsBindingOb
   }
 }
 
-class MobileChatPage extends StatefulWidget {
+class _MobileChatPage extends StatefulWidget {
   final _MessageHomePageState parent;
   final String phone;
 
-  const MobileChatPage({super.key, required this.parent, required this.phone});
+  const _MobileChatPage({required this.parent, required this.phone});
 
   @override
-  State<MobileChatPage> createState() => _MobileChatPageState();
+  State<_MobileChatPage> createState() => _MobileChatPageState();
 }
 
-class _MobileChatPageState extends State<MobileChatPage> {
+class _MobileChatPageState extends State<_MobileChatPage> {
   @override
   void initState() {
     super.initState();
@@ -1198,9 +1566,10 @@ class _MobileChatPageState extends State<MobileChatPage> {
   Widget build(BuildContext context) {
     return Scaffold(
       resizeToAvoidBottomInset: true,
-      appBar: AppBar(title: Text(widget.parent._displayConversationTitle(widget.phone))),
+      appBar: AppBar(
+        title: Text(widget.parent._displayConversationTitle(widget.phone)),
+      ),
       body: widget.parent._buildChatPanel(),
     );
   }
 }
-

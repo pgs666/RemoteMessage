@@ -39,6 +39,10 @@ class RespondViaMessageService : Service() {
             .orEmpty()
 
         if (recipients.isEmpty()) return
+        if (!GatewayRuntime.isSmsSendingSupported(this)) {
+            GatewayDebugLog.add(this, "RespondViaMessage skipped: ${getString(R.string.error_sms_not_supported)}")
+            return
+        }
 
         val resolvedSim = GatewaySimSupport.resolveForIntent(this, intent)
         val smsManager = when (val subId = resolvedSim.subscriptionId) {
@@ -48,11 +52,15 @@ class RespondViaMessageService : Service() {
         }
 
         recipients.forEach { phone ->
-            val parts = smsManager.divideMessage(body)
-            if (parts.size <= 1) {
-                smsManager.sendTextMessage(phone, null, body, null, null)
-            } else {
-                smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+            runCatching {
+                val parts = smsManager.divideMessage(body)
+                if (parts.size <= 1) {
+                    smsManager.sendTextMessage(phone, null, body, null, null)
+                } else {
+                    smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+                }
+            }.onFailure {
+                GatewayDebugLog.add(this, "RespondViaMessage failed for $phone: ${it.message ?: it.javaClass.simpleName}")
             }
         }
     }

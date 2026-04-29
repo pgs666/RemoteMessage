@@ -1,12 +1,14 @@
-﻿# RemoteMessage Middle Server (Rust)
+# RemoteMessage Middle Server (Rust)
 
-This is a Rust reimplementation of `middle_server` with the same wire-facing responsibilities:
+This is the Rust middle server for RemoteMessage:
 
 - HTTPS API server for gateway, client, crypto, and admin endpoints.
-- Segmented token auth through `X-Gateway-Token`, `X-Client-Token`, and `X-Admin-Token`.
-- SQLite persistence using the existing schema names and columns.
+- Per-credential token auth through `X-Gateway-Token`, `X-Client-Token`, and `X-Admin-Token`.
+- Gateway tokens are bound to the first registered `deviceId`; later gateway pull/ack/status calls must use the same `deviceId`.
+- Gateway registration does not allow overwriting an existing `deviceId` with a different public key.
+- SQLite persistence using the existing wire-facing schema names and columns where practical.
 - RSA-OAEP-SHA256 encryption/decryption compatible with the Android gateway protocol.
-- First-start onboarding payload and QR output in `RMS1|serverBaseUrl|clientToken|gatewayToken` format.
+- RMS2 JSON onboarding QR text files for client and gateway credentials.
 - Self-signed root CA file for clients/gateways to trust.
 - Maintenance loop for API log retention, message retention, orphan pin cleanup, and database size trimming.
 
@@ -14,21 +16,21 @@ The crate root has `#![forbid(unsafe_code)]`, so this crate cannot introduce Rus
 
 ## Runtime Files
 
-Runtime files are created beside the executable, matching the original server layout where practical:
+Runtime files are created beside the executable:
 
 ```text
-server.db                    # SQLite database
-server.conf                  # Server config and tokens
-server-cert.cer              # Root CA certificate for clients/gateways to import
-server-cert.pem              # HTTPS server certificate, PEM
-server-key.pem               # HTTPS server private key, PEM
-server-crypto-private.pem    # RSA private key for message payload crypto
-onboarding-qr.txt            # First-start onboarding text/QR
-qrcode.ps1 / qrcode.bat / qrcode.sh
-server.log                   # File log with size rotation and retention cleanup
+server.db                         # SQLite database, including auth_credentials
+server.conf                       # Server port, admin token, retention settings
+server-cert.cer                   # Root CA certificate for clients/gateways to import
+server-cert.pem                   # HTTPS server certificate, PEM
+server-key.pem                    # HTTPS server private key, PEM
+server-crypto-private.pem         # RSA private key for message payload crypto
+onboarding-client-<id>.txt        # RMS2 JSON client onboarding QR text
+onboarding-gateway-<id>.txt       # RMS2 JSON gateway onboarding QR text
+server.log                        # File log with size rotation and retention cleanup
 ```
 
-The Rust server uses `server-cert.pem` + `server-key.pem` for TLS instead of the .NET `server-cert.pfx` file. Clients still import `server-cert.cer`.
+Client and gateway token plaintext is only printed/written when a credential is created. The database stores token SHA-256 hashes, not plaintext tokens.
 
 ## Build
 
@@ -52,7 +54,33 @@ cargo build --release --manifest-path middle_server_rust/Cargo.toml
 cargo +stable-x86_64-pc-windows-gnu run --release --manifest-path middle_server_rust/Cargo.toml
 ```
 
-By default the server listens on `https://0.0.0.0:5001`. Edit `server.conf` and restart to change the port or tokens.
+By default the server listens on `https://0.0.0.0:5001`. Edit `server.conf` and restart to change the port or admin token.
+
+On first start, if no active client or gateway credential exists, the server creates one client credential and one gateway credential and writes RMS2 onboarding text files.
+
+Create extra credentials on startup:
+
+```powershell
+remote_message_middle_server.exe --new-client
+remote_message_middle_server.exe --new-gateway
+remote_message_middle_server.exe --new-client --new-gateway
+```
+
+## Onboarding Format
+
+Client QR payload:
+
+```json
+{"format":"RMS2","role":"client","serverBaseUrl":"https://192.168.1.100:5001","clientToken":"...","credentialId":"...","displayName":"...","createdAt":0}
+```
+
+Gateway QR payload:
+
+```json
+{"format":"RMS2","role":"gateway","serverBaseUrl":"https://192.168.1.100:5001","gatewayToken":"...","credentialId":"...","displayName":"...","boundDeviceId":null,"createdAt":0}
+```
+
+A gateway credential is unbound when generated. The first successful `/api/gateway/register` binds it to that request's `deviceId`; later gateway endpoints reject a different `deviceId`.
 
 ## Verification Commands
 
@@ -96,5 +124,3 @@ GET  /api/client/conversations/pins
 POST /api/client/send
 POST /api/admin/clear-server-data
 ```
-
-Validation limits and response shapes intentionally follow the current C# implementation closely.

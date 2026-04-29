@@ -1,5 +1,39 @@
 ﻿use serde::{Deserialize, Serialize};
 
+#[derive(Debug, Clone)]
+pub struct AuthCredentialRecord {
+    pub id: String,
+    pub role: String,
+    pub bound_device_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct CreatedAuthCredential {
+    pub id: String,
+    pub role: String,
+    pub display_name: String,
+    pub token: String,
+    pub bound_device_id: Option<String>,
+    pub created_at: i64,
+}
+
+#[derive(Debug, Default)]
+pub struct DefaultAuthCredentials {
+    pub client: Option<CreatedAuthCredential>,
+    pub gateway: Option<CreatedAuthCredential>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GatewayRegistrationResult {
+    Created,
+    AlreadyRegistered,
+    PublicKeyUpdated,
+    PublicKeyConflict,
+    DeviceAlreadyRegistered,
+    CredentialNotFound,
+    CredentialDeviceConflict,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RegisterGatewayRequest {

@@ -1,20 +1,16 @@
 import 'dart:convert';
-import 'dart:typed_data';
 
 import 'package:flutter/foundation.dart';
 import 'package:image/image.dart' as img;
 import 'package:zxing2/qrcode.dart';
-import 'package:zxing2/zxing2.dart';
 
 class OnboardingQrPayload {
   final String serverBaseUrl;
   final String clientToken;
-  final String gatewayToken;
 
   const OnboardingQrPayload({
     required this.serverBaseUrl,
     required this.clientToken,
-    required this.gatewayToken,
   });
 
   static OnboardingQrPayload parse(String raw) {
@@ -23,11 +19,10 @@ class OnboardingQrPayload {
       throw const FormatException('QR content is empty');
     }
 
-    if (text.startsWith('{')) {
-      return _parseJsonPayload(text);
+    if (!text.startsWith('{')) {
+      throw const FormatException('Unsupported onboarding QR format');
     }
-
-    return _parseCompactPayload(text);
+    return _parseJsonPayload(text);
   }
 
   static OnboardingQrPayload _parseJsonPayload(String text) {
@@ -35,46 +30,41 @@ class OnboardingQrPayload {
     if (json is! Map<String, dynamic>) {
       throw const FormatException('Invalid JSON onboarding payload');
     }
+    final format = json['format']?.toString().trim() ?? '';
+    final role = json['role']?.toString().trim() ?? '';
     final server = json['serverBaseUrl']?.toString().trim() ?? '';
     final clientToken = json['clientToken']?.toString().trim() ?? '';
-    final gatewayToken = json['gatewayToken']?.toString().trim() ?? '';
-    _validate(server, clientToken, gatewayToken);
-    return OnboardingQrPayload(
-      serverBaseUrl: server,
-      clientToken: clientToken,
-      gatewayToken: gatewayToken,
-    );
-  }
-
-  static OnboardingQrPayload _parseCompactPayload(String text) {
-    final parts = text.split('|');
-    if (parts.length < 4 || parts[0].trim() != 'RMS1') {
-      throw const FormatException('Unsupported onboarding QR format');
+    if (format != 'RMS2' || role != 'client') {
+      throw const FormatException('Unsupported onboarding QR role');
     }
-
-    final server = parts[1].trim();
-    final clientToken = parts[2].trim();
-    final gatewayToken = parts[3].trim();
-    _validate(server, clientToken, gatewayToken);
-    return OnboardingQrPayload(
-      serverBaseUrl: server,
-      clientToken: clientToken,
-      gatewayToken: gatewayToken,
-    );
+    _validate(server, clientToken);
+    return OnboardingQrPayload(serverBaseUrl: server, clientToken: clientToken);
   }
 
-  static void _validate(String server, String clientToken, String gatewayToken) {
+  static void _validate(String server, String clientToken) {
     final uri = Uri.tryParse(server);
-    final validScheme = uri != null && (uri.scheme == 'https' || uri.scheme == 'http') && (uri.host.isNotEmpty || uri.hasAuthority);
+    final validScheme =
+        uri != null &&
+        (uri.scheme == 'https' ||
+            (uri.scheme == 'http' && _isLocalDebugHttpHost(uri.host))) &&
+        (uri.host.isNotEmpty || uri.hasAuthority);
     if (!validScheme) {
-      throw const FormatException('Invalid serverBaseUrl in onboarding payload');
+      throw const FormatException(
+        'Invalid serverBaseUrl in onboarding payload',
+      );
     }
     if (clientToken.isEmpty) {
       throw const FormatException('Missing client token in onboarding payload');
     }
-    if (gatewayToken.isEmpty) {
-      throw const FormatException('Missing gateway token in onboarding payload');
-    }
+  }
+
+  static bool _isLocalDebugHttpHost(String host) {
+    final normalized = host.trim().toLowerCase();
+    return normalized == 'localhost' ||
+        normalized == '::1' ||
+        normalized == '10.0.2.2' ||
+        normalized == '10.0.3.2' ||
+        normalized.startsWith('127.');
   }
 }
 
@@ -87,8 +77,14 @@ String decodeQrTextFromImageBytes(Uint8List bytes) {
   final rotations = <num>[0, 90, 180, 270];
   Object? lastError;
   for (final angle in rotations) {
-    final candidate = angle == 0 ? decoded : img.copyRotate(decoded, angle: angle);
-    final rgba = candidate.convert(numChannels: 4).getBytes(order: img.ChannelOrder.rgba).buffer.asInt32List();
+    final candidate = angle == 0
+        ? decoded
+        : img.copyRotate(decoded, angle: angle);
+    final rgba = candidate
+        .convert(numChannels: 4)
+        .getBytes(order: img.ChannelOrder.rgba)
+        .buffer
+        .asInt32List();
     final source = RGBLuminanceSource(candidate.width, candidate.height, rgba);
     final bitmap = BinaryBitmap(HybridBinarizer(source));
     try {
@@ -102,7 +98,9 @@ String decodeQrTextFromImageBytes(Uint8List bytes) {
     }
   }
 
-  throw FormatException('QR code not found in image: ${lastError ?? "unknown"}');
+  throw FormatException(
+    'QR code not found in image: ${lastError ?? "unknown"}',
+  );
 }
 
 Future<String> decodeQrTextFromImageBytesAsync(Uint8List bytes) {

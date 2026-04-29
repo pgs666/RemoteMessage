@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import java.io.ByteArrayOutputStream
 import android.security.keystore.KeyGenParameterSpec
 import android.security.keystore.KeyProperties
@@ -27,6 +28,7 @@ import java.security.PrivateKey
 import java.security.PublicKey
 import java.security.Security
 import java.security.interfaces.RSAKey
+import java.security.spec.MGF1ParameterSpec
 import java.security.spec.PKCS8EncodedKeySpec
 import java.security.spec.X509EncodedKeySpec
 import java.security.cert.CertificateException
@@ -35,6 +37,8 @@ import java.security.cert.X509Certificate
 import android.util.Base64
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.Cipher
+import javax.crypto.spec.OAEPParameterSpec
+import javax.crypto.spec.PSource
 import javax.net.ssl.SSLContext
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
@@ -102,6 +106,12 @@ object GatewayRuntime {
     private var cachedHttpClientCertStamp: Long = -1L
 
     fun isHistorySyncRunning(): Boolean = historySyncInProgress.get()
+
+    fun isSmsSendingSupported(context: Context): Boolean {
+        val pm = context.packageManager
+        return pm.hasSystemFeature(PackageManager.FEATURE_TELEPHONY_MESSAGING) ||
+            pm.hasSystemFeature(PackageManager.FEATURE_TELEPHONY)
+    }
 
     private fun getDb(context: Context): GatewayLocalDb {
         if (db == null) {
@@ -212,7 +222,7 @@ object GatewayRuntime {
                     context,
                     "Resolved send SIM: slot=${resolvedSim.slotIndex ?: -1}, subId=${resolvedSim.subscriptionId ?: -1}, simPhone=${resolvedSim.simPhoneNumber ?: ""}"
                 )
-                runCatching {
+                val sendResult = runCatching {
                     sendTextMessageCompat(
                         context = context,
                         cfg = cfg,
@@ -224,43 +234,28 @@ object GatewayRuntime {
                         simPhoneNumber = resolvedSim.simPhoneNumber,
                         simCount = resolvedSimCount
                     )
-                }.onSuccess {
-                    if (messageId != null) {
-                        reportOutboundStatusAsync(
-                            context = context,
-                            cfg = cfg,
-                            update = OutboundStatusUpdate(
-                                messageId = messageId,
-                                targetPhone = phone,
-                                content = text,
-                                status = "dispatched",
-                                simSlotIndex = resolvedSim.slotIndex,
-                                simPhoneNumber = resolvedSim.simPhoneNumber,
-                                simCount = resolvedSimCount
-                            )
+                }
+                if (messageId != null) {
+                    val sendError = sendResult.exceptionOrNull()
+                    reportOutboundStatusAsync(
+                        context = context,
+                        cfg = cfg,
+                        update = OutboundStatusUpdate(
+                            messageId = messageId,
+                            targetPhone = phone,
+                            content = text,
+                            status = if (sendError == null) "dispatched" else "failed",
+                            simSlotIndex = resolvedSim.slotIndex,
+                            simPhoneNumber = resolvedSim.simPhoneNumber,
+                            simCount = resolvedSimCount,
+                            errorCode = if (sendError == null) null else -1,
+                            errorMessage = sendError?.smsFailureMessage(context)
                         )
-                    }
-                }.onFailure { sendError ->
-                    if (messageId != null) {
-                        reportOutboundStatusAsync(
-                            context = context,
-                            cfg = cfg,
-                            update = OutboundStatusUpdate(
-                                messageId = messageId,
-                                targetPhone = phone,
-                                content = text,
-                                status = "failed",
-                                simSlotIndex = resolvedSim.slotIndex,
-                                simPhoneNumber = resolvedSim.simPhoneNumber,
-                                simCount = resolvedSimCount,
-                                errorCode = -1,
-                                errorMessage = "send invocation failed: ${sendError.debugSummary()}"
-                            )
-                        )
-                    }
-                    throw sendError
-                }.getOrThrow()
-                GatewayDebugLog.add(context, "SMS dispatch invoked for $phone")
+                    )
+                }
+                sendResult
+                    .onSuccess { GatewayDebugLog.add(context, "SMS dispatch invoked for $phone") }
+                    .onFailure { GatewayDebugLog.add(context, "SMS dispatch failed for $phone: ${it.debugSummary()}") }
                 if (outboxId != null && ackToken != null) {
                     ackOutboundSync(context, cfg, outboxId, ackToken)
                     GatewayDebugLog.add(context, "Outbound ack success: outboxId=$outboxId")
@@ -268,6 +263,9 @@ object GatewayRuntime {
                     GatewayDebugLog.add(context, "Outbound ack skipped: missing outboxId/ackToken")
                 }
                 flushPendingUploads(context, cfg)
+                sendResult.exceptionOrNull()?.let {
+                    return@use "SMS send failed to $phone: ${it.message ?: it.javaClass.simpleName}"
+                }
                 return@use "SMS sent to $phone"
             }
         } catch (t: Throwable) {
@@ -834,12 +832,13 @@ object GatewayRuntime {
         simCount: Int?
     ) {
         requireSendSmsPermission(context)
-        val parts = smsManager.divideMessage(text)
+        requireSmsSendingSupported(context)
+        val parts = runSmsManagerCall(context) { smsManager.divideMessage(text) }
         if (messageId.isNullOrBlank()) {
             if (parts.size <= 1) {
-                smsManager.sendTextMessage(phone, null, text, null, null)
+                runSmsManagerCall(context) { smsManager.sendTextMessage(phone, null, text, null, null) }
             } else {
-                smsManager.sendMultipartTextMessage(phone, null, parts, null, null)
+                runSmsManagerCall(context) { smsManager.sendMultipartTextMessage(phone, null, parts, null, null) }
             }
             return
         }
@@ -863,10 +862,39 @@ object GatewayRuntime {
         }
 
         if (parts.size <= 1) {
-            smsManager.sendTextMessage(phone, null, text, sentIntents[0], null)
+            runSmsManagerCall(context) { smsManager.sendTextMessage(phone, null, text, sentIntents[0], null) }
         } else {
-            smsManager.sendMultipartTextMessage(phone, null, parts, sentIntents, null)
+            runSmsManagerCall(context) { smsManager.sendMultipartTextMessage(phone, null, parts, sentIntents, null) }
         }
+    }
+
+    fun requireSmsSendingSupported(context: Context) {
+        if (!isSmsSendingSupported(context)) {
+            throw IllegalStateException(context.getString(R.string.error_sms_not_supported))
+        }
+    }
+
+    private inline fun <T> runSmsManagerCall(context: Context, block: () -> T): T {
+        return try {
+            block()
+        } catch (e: UnsupportedOperationException) {
+            val message = e.message.orEmpty()
+            if (message.contains("sms is not supported", ignoreCase = true) ||
+                message.contains("not supported", ignoreCase = true)
+            ) {
+                throw IllegalStateException(context.getString(R.string.error_sms_not_supported), e)
+            }
+            throw e
+        }
+    }
+
+    private fun Throwable.smsFailureMessage(context: Context): String {
+        val unsupported = context.getString(R.string.error_sms_not_supported)
+        if (message == unsupported || cause?.message.orEmpty().contains("sms is not supported", ignoreCase = true)) {
+            return unsupported
+        }
+        val detail = message?.takeIf { it.isNotBlank() } ?: this::class.java.simpleName
+        return context.getString(R.string.error_sms_send_failed, detail)
     }
 
     private fun buildSentPendingIntent(
@@ -1356,14 +1384,23 @@ object GatewayRuntime {
 
     private fun encryptChunk(key: PublicKey, plainBytes: ByteArray): String {
         val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
-        cipher.init(Cipher.ENCRYPT_MODE, key)
+        cipher.init(Cipher.ENCRYPT_MODE, key, oaepSha256Spec())
         return Base64.encodeToString(cipher.doFinal(plainBytes), Base64.NO_WRAP)
     }
 
     private fun decryptChunk(key: PrivateKey, encryptedBase64: String): ByteArray {
         val cipher = Cipher.getInstance("RSA/ECB/OAEPWithSHA-256AndMGF1Padding")
-        cipher.init(Cipher.DECRYPT_MODE, key)
+        cipher.init(Cipher.DECRYPT_MODE, key, oaepSha256Spec())
         return cipher.doFinal(Base64.decode(encryptedBase64, Base64.NO_WRAP))
+    }
+
+    private fun oaepSha256Spec(): OAEPParameterSpec {
+        return OAEPParameterSpec(
+            "SHA-256",
+            "MGF1",
+            MGF1ParameterSpec.SHA256,
+            PSource.PSpecified.DEFAULT
+        )
     }
 
     private fun maxOaepSha256PlaintextSize(key: PublicKey): Int {

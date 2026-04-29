@@ -209,22 +209,22 @@ REM 解压 ZIP 文件后，双击运行 RemoteMessageServer-windows-x64.exe
 
 ```
 server.db                    # SQLite 数据库（自动创建表结构）
-server.conf                  # 配置文件（包含端口和三种令牌）
+server.conf                  # 配置文件（包含端口、admin token 和保留策略）
 server-cert.cer              # HTTPS 根证书（需导入到客户端和网关）
-server-cert.pfx              # HTTPS 服务端证书包（服务端自用）
+server-cert.pem              # HTTPS 服务端证书
+server-key.pem               # HTTPS 服务端私钥
 server-crypto-private.pem    # RSA 私钥（用于解密短信）
-onboarding-qr.txt            # 入网 QR 码内容（方便客户端/网关配置）
+onboarding-client-<id>.txt   # 客户端入网 QR 码内容
+onboarding-gateway-<id>.txt  # 网关入网 QR 码内容
 server.log                   # 运行日志文件
 ```
 
 #### 1.4 查看配置信息
 
-打开 `server.conf` 查看自动生成的令牌：
+打开 `server.conf` 查看服务端配置：
 
 ```ini
 https_port=5001
-gateway_token=<自动生成的24字节Base64字符串>
-client_token=<自动生成的24字节Base64字符串>
 admin_token=<自动生成的24字节Base64字符串>
 log_retention_days=14
 log_max_mb=32
@@ -234,19 +234,19 @@ db_max_mb=512
 maintenance_interval_minutes=60
 ```
 
-**重要**：复制并保存 `gateway_token`、`client_token` 和 `admin_token`，后续配置需要用到。
+**重要**：复制并保存 `admin_token`。客户端和网关 token 只会在创建凭据时写入 onboarding 文件或打印到终端，请保存对应的 `onboarding-client-<id>.txt` / `onboarding-gateway-<id>.txt`。
 
 #### 1.5 获取入网 QR 码
 
-查看 `onboarding-qr.txt` 文件，内容类似：
+查看 `onboarding-client-<id>.txt` 或 `onboarding-gateway-<id>.txt` 文件，内容类似：
 
 ```
-RMS1|https://192.168.1.100:5001|<client_token>|<gateway_token>
+{"format":"RMS2","role":"client|gateway","serverBaseUrl":"https://192.168.1.100:5001","clientToken|gatewayToken":"..."}
 ```
 
 你可以：
 - **方式1**：使用在线 QR 码生成器（如 https://www.qr-code-generator.com/），将此文本生成 QR 码图片
-- **方式2**：使用手机扫描下方终端输出的 ASCII QR 码（Linux/macOS）
+- **方式2**：使用手机扫描 onboarding 文件中的 ASCII QR 码
 - **方式3**：直接手动复制其中的地址和令牌
 
 #### 1.6 保持服务器运行
@@ -294,14 +294,14 @@ adb install RemoteMessageGateway-android.apk
 
    **方式A：扫描 QR 码（推荐）**
    - 点击 **"Scan QR"** 按钮
-   - 扫描服务器生成的 `onboarding-qr.txt` 中的 QR 码
+   - 扫描服务器生成的 `onboarding-gateway-<id>.txt` 中的 QR 码
    - 自动填充服务器地址和网关令牌
 
    **方式B：手动填写**
    - **Server Base URL**：`https://<服务器IP>:5001`
      - 例如：`https://192.168.1.100:5001`
    - **Device ID**：自定义设备标识，例如 `my-android-phone`
-   - **Gateway Token**：从 `server.conf` 复制 `gateway_token` 的值
+   - **Gateway Token**：从 `onboarding-gateway-<id>.txt` 复制 `gatewayToken` 的值，或运行服务端时使用 `--new-gateway` 新建
 
 3. **导入服务器证书**
    - 点击 **"Import Certificate"** 按钮
@@ -415,13 +415,13 @@ adb install flutter-client-android.apk
 
    **方式A：扫描 QR 码（推荐）**
    - 在设置页点击 **"Scan Onboarding QR"**
-   - 扫描服务器生成的 `onboarding-qr.txt` 中的 QR 码
+   - 扫描服务器生成的 `onboarding-client-<id>.txt` 中的 QR 码
    - 自动填充服务器地址和客户端令牌
 
    **方式B：手动填写**
    - 点击 **"Server Settings"** 区域
    - **Server Base URL**：`https://<服务器IP>:5001`
-   - **Client Token**：从 `server.conf` 复制 `client_token` 的值
+   - **Client Token**：从 `onboarding-client-<id>.txt` 复制 `clientToken` 的值，或运行服务端时使用 `--new-client` 新建
    - **Device ID**：与网关保持一致（例如 `my-android-phone`）
 
 4. **导入服务器根证书**（HTTPS 自签名根证书）
@@ -521,7 +521,7 @@ adb install flutter-client-android.apk
 - 网络不通
 
 **排查步骤**：
-1. 确认 `server.conf` 中的 `gateway_token` 与网关填写的一致
+1. 确认 `onboarding-gateway-<id>.txt` 中的 `gatewayToken` 与网关填写的一致
 2. 在网关手机浏览器访问 `https://<服务器IP>:5001/healthz`，确认可达
 3. 查看服务器日志 `server.log` 中的错误信息
 
@@ -535,7 +535,7 @@ adb install flutter-client-android.apk
 **排查步骤**：
 1. 检查网关应用状态，确认显示 **"Registered"** 和 **"Online"**
 2. 在网关应用点击 **"Poll & Send"** 手动触发一次轮询
-3. 检查客户端设置中的 `client_token` 与 `server.conf` 一致
+3. 检查客户端设置中的 client token 与 `onboarding-client-<id>.txt` 一致
 4. 在客户端设置页点击 **"Sync Now"** 手动同步
 
 #### Q4: Android 网关后台被杀死
@@ -573,15 +573,15 @@ server-cert.cer        # 客户端/网关注入的根证书
 server-cert.pem        # HTTPS 服务端证书
 server-key.pem         # HTTPS 服务端私钥
 server-crypto-private.pem  # 服务器RSA私钥
-onboarding-qr.txt      # 入网QR码内容 (首次启动)
+onboarding-client-<id>.txt   # 客户端入网QR码内容
+onboarding-gateway-<id>.txt  # 网关入网QR码内容
 ```
 
-编辑 `server.conf` 修改端口和令牌：
+编辑 `server.conf` 修改端口、admin token 和保留策略：
 ```ini
 https_port=5001
-gateway_token=replace-with-a-long-random-string
-client_token=replace-with-a-long-random-string
 admin_token=replace-with-a-long-random-string
+# 客户端/网关 token 通过首次启动生成的 onboarding 文件或 --new-client / --new-gateway 创建
 ```
 
 **发布为单文件 (推荐生产环境)：**
@@ -597,10 +597,10 @@ cargo build --release --manifest-path middle_server_rust/Cargo.toml
    gradle -p android_gateway :app:assembleDebug
    ```
 2. 打开应用，选择以下任一方式配置：
-   - **扫描QR码**：扫描服务端生成的 `onboarding-qr.txt` 中的QR码
+   - **扫描QR码**：扫描服务端生成的 `onboarding-gateway-<id>.txt` 中的QR码
    - **手动填写**：
      - **Server Base URL**：`https://<服务器IP>:5001`
-     - **Gateway Token**：与 `server.conf` 中的 `gateway_token` 一致
+     - **Gateway Token**：与 `onboarding-gateway-<id>.txt` 中的 `gatewayToken` 一致
 3. 导入 `server-cert.cer`
 4. 点击 **Register** 注册到服务器
 5. 授予短信权限，建议设置为默认短信应用
@@ -611,10 +611,10 @@ cargo build --release --manifest-path middle_server_rust/Cargo.toml
 
 运行后：
 1. 打开设置页，选择以下任一方式配置：
-   - **扫描QR码**：扫描服务端生成的入网QR码
+   - **扫描QR码**：扫描服务端生成的 `onboarding-client-<id>.txt`
    - **手动填写**：
      - **Server Base URL**：`https://<服务器IP>:5001`
-     - **Client Token**：与 `server.conf` 中的 `client_token` 一致
+     - **Client Token**：与 `onboarding-client-<id>.txt` 中的 `clientToken` 一致
 2. 导入 `server-cert.cer` (HTTPS 根证书)
 3. 返回主页即可看到会话列表
 

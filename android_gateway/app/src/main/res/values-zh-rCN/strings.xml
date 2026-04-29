@@ -139,6 +139,8 @@
     <string name="summary_clear_gateway_database">删除本地待上传记录并重置同步游标</string>
     <string name="summary_clear_server_database">删除远端短信、队列、SIM 档案、PIN 和 API 日志</string>
     <string name="summary_open_logs">查看网关调试输出和日志控制项</string>
+    <string name="error_sms_not_supported">当前设备不支持短信发送，请使用支持短信功能的真实手机作为网关。</string>
+    <string name="error_sms_send_failed">短信发送失败：%1$s</string>
     <string name="btn_scan_onboarding_qr">扫描配对二维码</string>
     <string name="status_onboarding_applied">配对二维码已应用，配置已保存并完成网关注册。</string>
     <string name="status_onboarding_invalid">配对二维码格式无效</string>

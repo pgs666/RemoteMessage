@@ -30,7 +30,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
+          flutter pub add path path_provider sqlite3:3.2.0 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -79,7 +79,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
+          flutter pub add path path_provider sqlite3:3.2.0 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -133,7 +133,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
+          flutter pub add path path_provider sqlite3:3.2.0 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow
@@ -281,7 +281,7 @@ jobs:
       - name: Add client dependencies
         run: |
           cd client/flutter_client_build
-          flutter pub add path path_provider sqlite3 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
+          flutter pub add path path_provider sqlite3:3.2.0 file_selector flutter_contacts flutter_secure_storage image zxing2 mobile_scanner
 
       - name: Install icon generation dependency
         run: python -m pip install --upgrade pillow

@@ -11,7 +11,7 @@ mod registry;
 mod repository;
 mod runtime;
 
-use std::{net::SocketAddr, sync::Arc, time::Duration};
+use std::{env, net::SocketAddr, sync::Arc, time::Duration};
 
 use api::AppState;
 use axum_server::tls_rustls::RustlsConfig;
@@ -27,6 +27,7 @@ use runtime::{executable_path, runtime_directory};
 async fn main() -> anyhow::Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
+    let startup_options = parse_startup_options()?;
     let settings = Arc::new(ServerRuntimeSettings::load_or_create()?);
     let https_settings = HttpsCertificateSettings::load_or_create()?;
     let logger = FileLogger::new(
@@ -36,6 +37,21 @@ async fn main() -> anyhow::Result<()> {
     )?;
     let repo = SqliteRepository::new()?;
     let crypto = Arc::new(CryptoState::load_or_create()?);
+    let default_credentials = repo.ensure_default_auth_credentials()?;
+    if let Some(credential) = default_credentials.client {
+        onboarding::write_credential_artifact(&settings, &credential, &logger)?;
+    }
+    if let Some(credential) = default_credentials.gateway {
+        onboarding::write_credential_artifact(&settings, &credential, &logger)?;
+    }
+    if startup_options.new_client {
+        let credential = repo.create_client_auth_credential(None)?;
+        onboarding::write_credential_artifact(&settings, &credential, &logger)?;
+    }
+    if startup_options.new_gateway {
+        let credential = repo.create_gateway_auth_credential(None)?;
+        onboarding::write_credential_artifact(&settings, &credential, &logger)?;
+    }
 
     logger.info(
         "Startup",
@@ -55,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
     );
     logger.info(
         "Startup",
-        "Runtime files are created beside the executable: server.db, server.conf, server-cert.cer (root CA), server-cert.pem, server-key.pem, server-crypto-private.pem",
+        "Runtime files are created beside the executable: server.db, server.conf, server.log, server-cert.cer (root CA), server-cert.pem, server-key.pem, server-crypto-private.pem",
     );
     logger.info(
         "Startup",
@@ -75,7 +91,7 @@ async fn main() -> anyhow::Result<()> {
             crypto.private_key_file_path().display()
         ),
     );
-    logger.info("Startup", "Auth enabled: token-only segmented headers (X-Gateway-Token / X-Client-Token / X-Admin-Token).");
+    logger.info("Startup", "Auth enabled: per-credential segmented headers (X-Gateway-Token / X-Client-Token / X-Admin-Token). Gateway tokens are bound to the first registered deviceId.");
     logger.info(
         "Startup",
         format!(
@@ -89,9 +105,6 @@ async fn main() -> anyhow::Result<()> {
         ),
     );
 
-    if settings.is_first_start {
-        onboarding::write_first_start_artifacts(&settings, &logger)?;
-    }
     logger.warn("Security", "Security review result: this service is suitable for LAN/VPN or reverse-proxied deployment, but it is not sufficient for direct public internet exposure without stronger auth, rate limiting, replay protection, and monitoring.");
 
     let maintenance_repo = repo.clone();
@@ -119,6 +132,30 @@ async fn main() -> anyhow::Result<()> {
         .serve(router.into_make_service())
         .await?;
     Ok(())
+}
+
+#[derive(Default)]
+struct StartupOptions {
+    new_client: bool,
+    new_gateway: bool,
+}
+
+fn parse_startup_options() -> anyhow::Result<StartupOptions> {
+    let mut options = StartupOptions::default();
+    for arg in env::args().skip(1) {
+        match arg.as_str() {
+            "--new-client" => options.new_client = true,
+            "--new-gateway" => options.new_gateway = true,
+            "--help" | "-h" => {
+                println!(
+                    "RemoteMessage middle server\n\nOptions:\n  --new-client   Create a new client token and onboarding QR txt before serving\n  --new-gateway  Create a new gateway token and onboarding QR txt before serving\n  -h, --help     Show this help"
+                );
+                std::process::exit(0);
+            }
+            _ => anyhow::bail!("unknown argument: {arg}"),
+        }
+    }
+    Ok(options)
 }
 
 async fn run_maintenance_loop(
