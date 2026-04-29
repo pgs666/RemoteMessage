@@ -1,0 +1,29 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <attr name="rmgCardFilledStyle" format="reference" />
+    <attr name="rmgCardHeroStyle" format="reference" />
+    <attr name="rmgCardOutlinedStyle" format="reference" />
+    <attr name="rmgButtonPrimaryStyle" format="reference" />
+    <attr name="rmgButtonTonalStyle" format="reference" />
+    <attr name="rmgButtonOutlinedStyle" format="reference" />
+    <attr name="rmgButtonListStyle" format="reference" />
+    <attr name="rmgTextInputStyle" format="reference" />
+    <attr name="text" format="string" />
+    <attr name="subtext" format="string" />
+    <attr name="icon" format="reference" />
+    <attr name="iconTint" format="color|reference" />
+
+    <declare-styleable name="LargeActionCard">
+        <attr name="text" />
+        <attr name="subtext" />
+        <attr name="icon" />
+        <attr name="iconTint" />
+    </declare-styleable>
+
+    <declare-styleable name="LargeActionLabel">
+        <attr name="text" />
+        <attr name="subtext" />
+        <attr name="icon" />
+        <attr name="iconTint" />
+    </declare-styleable>
+</resources>

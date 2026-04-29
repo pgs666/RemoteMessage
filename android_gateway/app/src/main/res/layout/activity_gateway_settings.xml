@@ -1,0 +1,224 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.coordinatorlayout.widget.CoordinatorLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:id="@+id/rootLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/rmg_background">
+
+    <com.google.android.material.appbar.AppBarLayout
+        android:id="@+id/appBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:background="@color/rmg_surface_card"
+        android:elevation="0dp"
+        android:stateListAnimator="@null"
+        app:elevation="0dp">
+
+        <com.google.android.material.appbar.MaterialToolbar
+            android:id="@+id/toolbar"
+            android:layout_width="match_parent"
+            android:layout_height="?attr/actionBarSize"
+            android:background="@color/rmg_surface_card"
+            app:navigationIcon="?attr/homeAsUpIndicator"
+            app:title="@string/title_settings"
+            app:titleTextColor="@color/rmg_on_surface" />
+    </com.google.android.material.appbar.AppBarLayout>
+
+    <androidx.core.widget.NestedScrollView
+        android:id="@+id/settingsScroll"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="@color/rmg_background"
+        android:clipToPadding="false"
+        app:layout_behavior="@string/appbar_scrolling_view_behavior">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:paddingHorizontal="16dp"
+            android:paddingTop="12dp"
+            android:paddingBottom="28dp">
+            <com.google.android.material.progressindicator.LinearProgressIndicator
+                android:id="@+id/progressSettings"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="8dp"
+                android:visibility="gone"
+                app:indicatorColor="@color/rmg_rikkaui_blue"
+                app:trackColor="@color/rmg_primary_light" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_marginTop="8dp"
+                android:layout_marginBottom="6dp"
+                android:text="@string/section_settings_gateway"
+                android:textAppearance="@style/TextAppearance.RemoteMessage.SectionLabel" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnPollOnce"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_sync"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_poll_once"
+                app:text="@string/btn_poll_once" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnSyncHistory"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_sync"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_sync_history"
+                app:text="@string/btn_sync_history" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnTestLocalSms"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_info"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_test_local_sms"
+                app:text="@string/btn_test_local_sms" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnFlushPending"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_check_circle"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_flush_pending"
+                app:text="@string/btn_flush_pending" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnImportCert"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_shield"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_import_cert"
+                app:text="@string/btn_import_cert" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_marginTop="14dp"
+                android:layout_marginBottom="6dp"
+                android:text="@string/section_settings_permissions"
+                android:textAppearance="@style/TextAppearance.RemoteMessage.SectionLabel" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnRequestRuntimePermissions"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_shield"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_permission_runtime"
+                app:text="@string/item_request_runtime_permissions" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnRequestDefaultSmsRole"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_list"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_permission_sms_role"
+                app:text="@string/item_request_default_sms_role" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnRequestUsageAccess"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_grid"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_permission_usage"
+                app:text="@string/item_request_usage_access" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnRequestBatteryOptimization"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_support"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_permission_battery"
+                app:text="@string/item_request_battery_optimization" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnViewPermissionStatus"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_info"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_permission_status"
+                app:text="@string/item_view_permission_status" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnOpenAppSettings"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_settings"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_app_settings"
+                app:text="@string/item_open_app_settings" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_marginTop="14dp"
+                android:layout_marginBottom="6dp"
+                android:text="@string/section_settings_database"
+                android:textAppearance="@style/TextAppearance.RemoteMessage.SectionLabel" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnEditSimNumbers"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_support"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_edit_sim_numbers"
+                app:text="@string/item_edit_sim_numbers" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnClearGatewayDatabase"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_grid"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_clear_gateway_database"
+                app:text="@string/item_clear_gateway_database" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnClearServerDatabase"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_logs"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_clear_server_database"
+                app:text="@string/item_clear_server_database" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginHorizontal="4dp"
+                android:layout_marginTop="14dp"
+                android:layout_marginBottom="6dp"
+                android:text="@string/section_settings_logs"
+                android:textAppearance="@style/TextAppearance.RemoteMessage.SectionLabel" />
+
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnOpenLogPage"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                app:icon="@drawable/ic_logs"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_open_logs"
+                app:text="@string/title_logs_entry" />
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
+</androidx.coordinatorlayout.widget.CoordinatorLayout>

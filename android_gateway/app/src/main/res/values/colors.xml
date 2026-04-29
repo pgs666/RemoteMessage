@@ -1,0 +1,19 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="rmg_primary">#009688</color>
+    <color name="rmg_primary_dark">#00796B</color>
+    <color name="rmg_primary_light">#E0F2F1</color>
+    <color name="rmg_accent">#00BFA5</color>
+    <color name="rmg_on_primary">#FFFFFF</color>
+    <color name="rmg_background">#FAFAFA</color>
+    <color name="rmg_surface_card">#FFFFFF</color>
+    <color name="rmg_on_surface">#202124</color>
+    <color name="rmg_on_surface_variant">#5F6368</color>
+    <color name="rmg_outline">#DADCE0</color>
+    <color name="rmg_outline_soft">#ECEFF1</color>
+    <color name="rmg_error">#B00020</color>
+    <color name="rmg_rikkaui_blue">#284F86</color>
+    <color name="rmg_rikkaui_stopped">#8A8A8A</color>
+    <color name="rmg_icon">#000000</color>
+    <color name="rmg_header_text">#1B365D</color>
+</resources>

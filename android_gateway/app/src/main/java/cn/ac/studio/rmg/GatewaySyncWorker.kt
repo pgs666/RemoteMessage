@@ -17,6 +17,10 @@ class GatewaySyncWorker(
 ) : CoroutineWorker(appContext, params) {
 
     override suspend fun doWork(): Result {
+        if (!GatewayConfigStore.isSyncEnabled(applicationContext)) {
+            return Result.success()
+        }
+
         val prefs = applicationContext.getSharedPreferences("gateway_config", Context.MODE_PRIVATE)
         val server = prefs.getString("server_base", "") ?: ""
         val deviceId = prefs.getString("device_id", "") ?: ""
@@ -54,6 +58,11 @@ class GatewaySyncWorker(
         private const val WORK_NAME = "gateway-periodic-sync"
 
         fun schedule(context: Context) {
+            if (!GatewayConfigStore.isSyncEnabled(context)) {
+                cancel(context)
+                return
+            }
+
             val constraints = Constraints.Builder()
                 .setRequiredNetworkType(NetworkType.CONNECTED)
                 .build()
@@ -65,6 +74,10 @@ class GatewaySyncWorker(
 
             WorkManager.getInstance(context)
                 .enqueueUniquePeriodicWork(WORK_NAME, ExistingPeriodicWorkPolicy.UPDATE, request)
+        }
+
+        fun cancel(context: Context) {
+            WorkManager.getInstance(context).cancelUniqueWork(WORK_NAME)
         }
     }
 }

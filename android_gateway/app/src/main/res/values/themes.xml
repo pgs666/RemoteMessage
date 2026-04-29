@@ -1,4 +1,130 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.RemoteMessageGateway" parent="Theme.AppCompat.Light.NoActionBar" />
+    <style name="Theme.RemoteMessageGateway" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="windowActionBar">false</item>
+        <item name="windowNoTitle">true</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:windowBackground">@color/rmg_background</item>
+        <item name="colorPrimary">@color/rmg_primary</item>
+        <item name="colorPrimaryVariant">@color/rmg_primary_dark</item>
+        <item name="colorSecondary">@color/rmg_accent</item>
+        <item name="colorOnPrimary">@color/rmg_on_primary</item>
+        <item name="colorOnSecondary">@color/rmg_on_primary</item>
+        <item name="colorSurface">@color/rmg_surface_card</item>
+        <item name="colorOnSurface">@color/rmg_on_surface</item>
+        <item name="colorError">@color/rmg_error</item>
+        <item name="colorControlNormal">@color/rmg_icon</item>
+        <item name="materialAlertDialogTheme">@style/ThemeOverlay.RemoteMessage.MaterialAlertDialog</item>
+        <item name="materialButtonStyle">@style/Widget.RemoteMessage.Button.Classic.Primary</item>
+        <item name="rmgCardFilledStyle">@style/Widget.RemoteMessage.Card.Classic.Filled</item>
+        <item name="rmgCardHeroStyle">@style/Widget.RemoteMessage.Card.Classic.Hero</item>
+        <item name="rmgCardOutlinedStyle">@style/Widget.RemoteMessage.Card.Classic.Outlined</item>
+        <item name="rmgButtonPrimaryStyle">@style/Widget.RemoteMessage.Button.Classic.Primary</item>
+        <item name="rmgButtonTonalStyle">@style/Widget.RemoteMessage.Button.Classic.Tonal</item>
+        <item name="rmgButtonOutlinedStyle">@style/Widget.RemoteMessage.Button.Classic.Outlined</item>
+        <item name="rmgButtonListStyle">@style/Widget.RemoteMessage.Button.Classic.ListItem</item>
+        <item name="rmgTextInputStyle">@style/Widget.RemoteMessage.TextInput.Classic.Outlined</item>
+    </style>
+
+    <style name="ThemeOverlay.RemoteMessage.MaterialAlertDialog" parent="ThemeOverlay.MaterialComponents.MaterialAlertDialog">
+        <item name="shapeAppearanceOverlay">@style/ShapeAppearance.RemoteMessage.Dialog.Classic</item>
+    </style>
+
+    <style name="ThemeOverlay.RemoteMessage.ActionCardDark" parent="ThemeOverlay.MaterialComponents.Dark">
+        <item name="android:textColorPrimary">@android:color/white</item>
+        <item name="android:textColorSecondary">#DCE8F7</item>
+        <item name="colorControlNormal">@android:color/white</item>
+    </style>
+
+    <style name="ShapeAppearance.RemoteMessage.Dialog.Classic" parent="">
+        <item name="cornerFamily">rounded</item>
+        <item name="cornerSize">8dp</item>
+    </style>
+
+    <style name="Widget.RemoteMessage.Card.Classic.Filled" parent="Widget.MaterialComponents.CardView">
+        <item name="cardBackgroundColor">@color/rmg_surface_card</item>
+        <item name="cardCornerRadius">4dp</item>
+        <item name="cardElevation">2dp</item>
+        <item name="strokeWidth">0dp</item>
+    </style>
+
+    <style name="Widget.RemoteMessage.Card.Classic.Hero" parent="Widget.MaterialComponents.CardView">
+        <item name="cardBackgroundColor">@color/rmg_surface_card</item>
+        <item name="cardCornerRadius">4dp</item>
+        <item name="cardElevation">2dp</item>
+        <item name="strokeColor">@color/rmg_primary_light</item>
+        <item name="strokeWidth">1dp</item>
+    </style>
+
+    <style name="Widget.RemoteMessage.Card.Classic.Outlined" parent="Widget.MaterialComponents.CardView">
+        <item name="cardBackgroundColor">@color/rmg_surface_card</item>
+        <item name="cardCornerRadius">4dp</item>
+        <item name="cardElevation">2dp</item>
+        <item name="strokeColor">@color/rmg_outline</item>
+        <item name="strokeWidth">1dp</item>
+    </style>
+
+    <style name="Widget.RemoteMessage.Button.Classic.Primary" parent="Widget.MaterialComponents.Button">
+        <item name="android:textAllCaps">false</item>
+        <item name="cornerRadius">4dp</item>
+        <item name="android:minHeight">42dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+
+    <style name="Widget.RemoteMessage.Button.Classic.Tonal" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="cornerRadius">4dp</item>
+        <item name="strokeColor">@color/rmg_primary</item>
+        <item name="android:minHeight">42dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+
+    <style name="Widget.RemoteMessage.Button.Classic.Outlined" parent="Widget.MaterialComponents.Button.OutlinedButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="cornerRadius">4dp</item>
+        <item name="strokeColor">@color/rmg_outline</item>
+        <item name="android:minHeight">42dp</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
+    </style>
+
+    <style name="Widget.RemoteMessage.Button.Classic.ListItem" parent="Widget.MaterialComponents.Button.TextButton">
+        <item name="android:textAllCaps">false</item>
+        <item name="android:gravity">center_vertical|start</item>
+        <item name="android:textAlignment">viewStart</item>
+        <item name="android:minHeight">48dp</item>
+        <item name="android:paddingStart">0dp</item>
+        <item name="android:paddingEnd">0dp</item>
+        <item name="backgroundTint">@android:color/transparent</item>
+        <item name="rippleColor">@color/rmg_primary_light</item>
+        <item name="android:textColor">@color/rmg_on_surface</item>
+    </style>
+
+    <style name="Widget.RemoteMessage.TextInput.Classic.Outlined" parent="Widget.MaterialComponents.TextInputLayout.OutlinedBox.Dense">
+        <item name="boxBackgroundColor">@color/rmg_surface_card</item>
+        <item name="boxStrokeColor">@color/rmg_outline</item>
+        <item name="boxCornerRadiusTopStart">4dp</item>
+        <item name="boxCornerRadiusTopEnd">4dp</item>
+        <item name="boxCornerRadiusBottomStart">4dp</item>
+        <item name="boxCornerRadiusBottomEnd">4dp</item>
+    </style>
+
+    <style name="TextAppearance.RemoteMessage.SectionLabel" parent="TextAppearance.MaterialComponents.Caption">
+        <item name="android:textAllCaps">true</item>
+        <item name="android:letterSpacing">0.08</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/rmg_on_surface_variant</item>
+    </style>
+
+    <style name="TextAppearance.RemoteMessage.Title" parent="TextAppearance.MaterialComponents.Subtitle1">
+        <item name="android:textStyle">bold</item>
+        <item name="android:textColor">@color/rmg_on_surface</item>
+    </style>
+
+    <style name="TextAppearance.RemoteMessage.Body" parent="TextAppearance.MaterialComponents.Body2">
+        <item name="android:textColor">@color/rmg_on_surface_variant</item>
+    </style>
 </resources>

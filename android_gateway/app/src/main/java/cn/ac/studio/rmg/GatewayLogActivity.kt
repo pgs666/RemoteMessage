@@ -4,19 +4,21 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.os.Bundle
-import android.widget.Button
+import android.view.MenuItem
+import android.view.View
 import android.widget.EditText
-import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
-import androidx.activity.ComponentActivity
+import androidx.appcompat.app.AppCompatActivity
+import cn.ac.studio.rmg.ui.LargeActionLabel
+import com.google.android.material.switchmaterial.SwitchMaterial
 
-class GatewayLogActivity : ComponentActivity() {
+class GatewayLogActivity : AppCompatActivity() {
     private var paused = false
     private lateinit var textLog: TextView
-    private lateinit var btnPauseRefresh: Button
-    private lateinit var switchEnableLog: Switch
-    private lateinit var switchAutoClear: Switch
+    private lateinit var btnPauseRefresh: LargeActionLabel
+    private lateinit var switchEnableLog: SwitchMaterial
+    private lateinit var switchAutoClear: SwitchMaterial
     private lateinit var editAutoClearMinutes: EditText
 
     private val debugLogListener = listener@{ text: String ->
@@ -27,17 +29,21 @@ class GatewayLogActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        GatewayTheme.apply(this)
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_gateway_log)
-
+        GatewayTheme.applyEdgeToEdgePadding(findViewById(R.id.appBar), includeTop = true, includeBottom = false)
+        GatewayTheme.applyEdgeToEdgePadding(findViewById(R.id.logScroll), includeTop = false, includeBottom = true)
+        setSupportActionBar(findViewById(R.id.toolbar))
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
         textLog = findViewById(R.id.textLogContent)
         btnPauseRefresh = findViewById(R.id.btnPauseLogRefresh)
         switchEnableLog = findViewById(R.id.switchEnableLog)
         switchAutoClear = findViewById(R.id.switchAutoClearLog)
         editAutoClearMinutes = findViewById(R.id.editAutoClearMinutes)
-        val btnSaveAutoClear = findViewById<Button>(R.id.btnSaveAutoClear)
-        val btnCopyLog = findViewById<Button>(R.id.btnCopyLog)
-        val btnClearLogNow = findViewById<Button>(R.id.btnClearLogNow)
+        val btnSaveAutoClear = findViewById<View>(R.id.btnSaveAutoClear)
+        val btnCopyLog = findViewById<View>(R.id.btnCopyLog)
+        val btnClearLogNow = findViewById<View>(R.id.btnClearLogNow)
 
         title = getString(R.string.title_log_page)
         renderCurrentLog()
@@ -110,6 +116,14 @@ class GatewayLogActivity : ComponentActivity() {
         super.onStop()
     }
 
+    override fun onOptionsItemSelected(item: MenuItem): Boolean {
+        if (item.itemId == android.R.id.home) {
+            finish()
+            return true
+        }
+        return super.onOptionsItemSelected(item)
+    }
+
     private fun renderCurrentLog() {
         textLog.text = GatewayDebugLog.current(this).ifBlank { getString(R.string.status_debug_log_empty) }
     }
@@ -117,4 +131,5 @@ class GatewayLogActivity : ComponentActivity() {
     private fun updatePauseRefreshButton() {
         btnPauseRefresh.text = if (paused) getString(R.string.btn_resume_log_refresh) else getString(R.string.btn_pause_log_refresh)
     }
+
 }
