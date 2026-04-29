@@ -14,7 +14,7 @@ import cn.ac.studio.rmg.R
 import com.google.android.material.card.MaterialCardView
 
 /**
- * Adapted from ClashMetaForAndroid's LargeActionCard (GPL-3.0).
+ * Adapted from an upstream GPL-3.0 LargeActionCard implementation.
  * This version removes databinding and keeps only the reusable dashboard component behavior.
  */
 class LargeActionCard @JvmOverloads constructor(

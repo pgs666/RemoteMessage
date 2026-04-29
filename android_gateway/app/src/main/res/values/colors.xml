@@ -5,24 +5,15 @@
     <color name="rmg_primary_light">#E0F2F1</color>
     <color name="rmg_accent">#00BFA5</color>
     <color name="rmg_on_primary">#FFFFFF</color>
-    <color name="rmg_primary_container">#CDEFEA</color>
-    <color name="rmg_on_primary_container">#003B35</color>
-    <color name="rmg_secondary">#455A64</color>
-    <color name="rmg_secondary_container">#DDE8EC</color>
-    <color name="rmg_on_secondary_container">#142328</color>
     <color name="rmg_background">#FAFAFA</color>
-    <color name="rmg_surface">#FAFAFA</color>
     <color name="rmg_surface_card">#FFFFFF</color>
-    <color name="rmg_surface_variant">#ECEFF1</color>
     <color name="rmg_on_surface">#202124</color>
     <color name="rmg_on_surface_variant">#5F6368</color>
     <color name="rmg_outline">#DADCE0</color>
     <color name="rmg_outline_soft">#ECEFF1</color>
     <color name="rmg_error">#B00020</color>
-    <color name="rmg_clash_blue">#284F86</color>
-    <color name="rmg_clash_title">#666666</color>
-    <color name="rmg_clash_subtitle">#8A8A8A</color>
-    <color name="rmg_clash_row_text">#777777</color>
+    <color name="rmg_rikkaui_blue">#284F86</color>
+    <color name="rmg_rikkaui_stopped">#8A8A8A</color>
     <color name="rmg_icon">#000000</color>
     <color name="rmg_header_text">#1B365D</color>
 </resources>

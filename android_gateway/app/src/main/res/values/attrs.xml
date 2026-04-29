@@ -12,7 +12,6 @@
     <attr name="subtext" format="string" />
     <attr name="icon" format="reference" />
     <attr name="iconTint" format="color|reference" />
-    <attr name="colorClashStopped" format="color" />
 
     <declare-styleable name="LargeActionCard">
         <attr name="text" />

@@ -15,7 +15,6 @@
         <item name="colorOnSurface">@color/rmg_on_surface</item>
         <item name="colorError">@color/rmg_error</item>
         <item name="colorControlNormal">@color/rmg_icon</item>
-        <item name="colorClashStopped">@color/rmg_clash_subtitle</item>
         <item name="materialAlertDialogTheme">@style/ThemeOverlay.RemoteMessage.MaterialAlertDialog</item>
         <item name="materialButtonStyle">@style/Widget.RemoteMessage.Button.Classic.Primary</item>
         <item name="rmgCardFilledStyle">@style/Widget.RemoteMessage.Card.Classic.Filled</item>

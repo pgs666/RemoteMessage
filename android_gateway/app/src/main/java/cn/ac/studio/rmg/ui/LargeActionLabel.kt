@@ -15,7 +15,7 @@ import androidx.core.content.ContextCompat
 import cn.ac.studio.rmg.R
 
 /**
- * Adapted from ClashMetaForAndroid's LargeActionLabel (GPL-3.0).
+ * Adapted from an upstream GPL-3.0 LargeActionLabel implementation.
  * This version removes databinding and uses local theme colors.
  */
 class LargeActionLabel @JvmOverloads constructor(

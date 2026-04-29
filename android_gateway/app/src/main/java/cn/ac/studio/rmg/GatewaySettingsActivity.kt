@@ -93,6 +93,7 @@ class GatewaySettingsActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnRequestBatteryOptimization).setOnClickListener { requestIgnoreBatteryOptimizations() }
         findViewById<View>(R.id.btnViewPermissionStatus).setOnClickListener { showStatus(buildPermissionStatusSummary()) }
         findViewById<View>(R.id.btnOpenAppSettings).setOnClickListener { openAppSettings() }
+        findViewById<View>(R.id.btnPollOnce).setOnClickListener { pollOnce() }
         findViewById<View>(R.id.btnSyncHistory).setOnClickListener { syncHistory() }
         findViewById<View>(R.id.btnTestLocalSms).setOnClickListener { testLocalSms() }
         findViewById<View>(R.id.btnFlushPending).setOnClickListener { flushPendingUploads() }
@@ -113,6 +114,34 @@ class GatewaySettingsActivity : AppCompatActivity() {
             return true
         }
         return super.onOptionsItemSelected(item)
+    }
+
+    private fun pollOnce() {
+        if (!ensureRuntimePermissionsForAction(GatewayPermissionCenter.sendSmsPermissions())) {
+            return
+        }
+        val cfg = validSavedConfigOrNull() ?: return
+        showProgress(indeterminate = true)
+        GatewayRuntime.pollAndSend(this, cfg) {
+            runOnUiThread {
+                hideProgress()
+                showStatus(it)
+            }
+        }
+    }
+
+    private fun validSavedConfigOrNull(): GatewayConfig? {
+        val values = GatewayConfigStore.load(this)
+        if (values.serverBaseUrl.isBlank()) {
+            showStatus(getString(R.string.status_invalid_server))
+            return null
+        }
+        if (values.deviceId.isBlank()) {
+            showStatus(getString(R.string.status_invalid_device))
+            return null
+        }
+        RuntimeConfig.password = values.password.ifBlank { null }
+        return GatewayConfig(values.serverBaseUrl, values.deviceId)
     }
 
     private fun syncHistory() {

@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -65,13 +66,13 @@ class MainActivity : AppCompatActivity() {
         connectionCard = findViewById(R.id.btnSave)
         gatewayCard = findViewById(R.id.btnRegister)
         syncProgressBar = findViewById(R.id.progressSync)
-        setStatus(getString(R.string.status_ready))
+        refreshRunningCardSummary()
 
         findViewById<View>(R.id.btnSave).setOnClickListener {
             startActivity(Intent(this, ConnectionActivity::class.java))
         }
         findViewById<View>(R.id.btnRegister).setOnClickListener { registerGateway() }
-        findViewById<View>(R.id.btnPollOnce).setOnClickListener { pollOnce() }
+        findViewById<View>(R.id.btnPollOnce).setOnClickListener { onRunningCardClicked() }
         findViewById<View>(R.id.btnOpenLogPage).setOnClickListener {
             startActivity(Intent(this, GatewayLogActivity::class.java))
         }
@@ -79,8 +80,8 @@ class MainActivity : AppCompatActivity() {
             startActivity(Intent(this, GatewaySettingsActivity::class.java))
         }
 
-        GatewaySyncWorker.schedule(this)
-        GatewayForegroundService.start(this)
+        startSyncServiceIfEnabled()
+        statusCard?.postDelayed({ refreshRunningCardSummary() }, 300)
     }
 
     override fun onResume() {
@@ -100,22 +101,7 @@ class MainActivity : AppCompatActivity() {
                 refreshDashboardSummaries()
             }
         }
-        GatewaySyncWorker.schedule(this)
-        GatewayForegroundService.start(this)
-    }
-
-    private fun pollOnce() {
-        if (!ensureRuntimePermissionsForAction(GatewayPermissionCenter.sendSmsPermissions())) {
-            return
-        }
-        val cfg = validSavedConfigOrNull() ?: return
-        showProgress(indeterminate = true)
-        GatewayRuntime.pollAndSend(this, cfg) {
-            runOnUiThread {
-                hideProgress()
-                setStatus(it)
-            }
-        }
+        startSyncServiceIfEnabled()
     }
 
     private fun validSavedConfigOrNull(): GatewayConfig? {
@@ -134,12 +120,58 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshDashboardSummaries() {
         val values = GatewayConfigStore.load(this)
+        refreshRunningCardSummary()
         connectionCard?.subtext = if (values.serverBaseUrl.isBlank()) {
             getString(R.string.summary_connection_unconfigured)
         } else {
             getString(R.string.summary_connection_configured, values.serverBaseUrl, values.webUiPort)
         }
         gatewayCard?.subtext = values.deviceId.ifBlank { getString(R.string.summary_gateway_unregistered) }
+    }
+
+    private fun onRunningCardClicked() {
+        val enable = !GatewayConfigStore.isSyncEnabled(this)
+        GatewayConfigStore.setSyncEnabled(this, enable)
+        setStatus(
+            getString(
+                if (enable) R.string.status_sync_service_enabled else R.string.status_sync_service_disabled
+            )
+        )
+        refreshRunningCardSummary()
+        statusCard?.postDelayed({ refreshRunningCardSummary() }, 300)
+    }
+
+    private fun refreshRunningCardSummary() {
+        val enabled = GatewayConfigStore.isSyncEnabled(this)
+        statusCard?.apply {
+            setCardBackgroundColor(
+                ContextCompat.getColor(
+                    this@MainActivity,
+                    if (enabled) R.color.rmg_rikkaui_blue else R.color.rmg_rikkaui_stopped
+                )
+            )
+            text = getString(if (enabled) R.string.status_running else R.string.status_stopped)
+            subtext = if (enabled) {
+                forwardedCountText(GatewayStatsStore.forwardedCount(this@MainActivity))
+            } else {
+                getString(R.string.summary_start_gateway_sync)
+            }
+        }
+    }
+
+    private fun forwardedCountText(count: Long): String {
+        val quantity = count.coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+        return resources.getQuantityString(R.plurals.summary_forwarded_count, quantity, count)
+    }
+
+    private fun startSyncServiceIfEnabled() {
+        if (!GatewayConfigStore.isSyncEnabled(this)) {
+            GatewaySyncWorker.cancel(this)
+            GatewayForegroundService.stop(this)
+            return
+        }
+        GatewaySyncWorker.schedule(this)
+        GatewayForegroundService.start(this)
     }
 
     private fun ensureRuntimePermissionsForAction(required: List<String>): Boolean {
@@ -285,7 +317,9 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setStatus(text: CharSequence) {
-        statusCard?.subtext = text
+        GatewayDebugLog.add(this, text.toString())
+        Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+        refreshRunningCardSummary()
     }
 
     private fun showProgress(indeterminate: Boolean, progress: Int = 0, max: Int = 100) {

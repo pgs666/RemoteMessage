@@ -34,6 +34,7 @@ class GatewayForegroundService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        running = true
         createNotificationChannel()
         startForeground(NOTIFICATION_ID, buildNotification(getString(R.string.fg_sync_starting)))
     }
@@ -44,7 +45,13 @@ class GatewayForegroundService : Service() {
                 stopSelf()
                 return START_NOT_STICKY
             }
-            else -> startSyncLoopIfNeeded()
+            else -> {
+                if (!GatewayConfigStore.isSyncEnabled(this)) {
+                    stopSelf()
+                    return START_NOT_STICKY
+                }
+                startSyncLoopIfNeeded()
+            }
         }
         return START_STICKY
     }
@@ -53,6 +60,7 @@ class GatewayForegroundService : Service() {
         syncLoopJob?.cancel()
         syncLoopJob = null
         serviceScope.cancel()
+        running = false
         super.onDestroy()
     }
 
@@ -69,6 +77,11 @@ class GatewayForegroundService : Service() {
     }
 
     private fun runSyncCycle() {
+        if (!GatewayConfigStore.isSyncEnabled(this)) {
+            stopSelf()
+            return
+        }
+
         if (!syncInProgress.compareAndSet(false, true)) {
             return
         }
@@ -162,6 +175,9 @@ class GatewayForegroundService : Service() {
     }
 
     companion object {
+        @Volatile
+        private var running = false
+
         private const val ACTION_START = "cn.ac.studio.rmg.action.START_SYNC"
         private const val ACTION_STOP = "cn.ac.studio.rmg.action.STOP_SYNC"
         private const val NOTIFICATION_ID = 10010
@@ -174,8 +190,9 @@ class GatewayForegroundService : Service() {
         }
 
         fun stop(context: Context) {
-            val intent = Intent(context, GatewayForegroundService::class.java).setAction(ACTION_STOP)
-            context.startService(intent)
+            context.stopService(Intent(context, GatewayForegroundService::class.java).setAction(ACTION_STOP))
         }
+
+        fun isRunning(): Boolean = running
     }
 }

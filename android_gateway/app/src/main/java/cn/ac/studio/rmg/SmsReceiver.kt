@@ -51,6 +51,10 @@ class SmsReceiver : BroadcastReceiver() {
         val deviceId = prefs.getString("device_id", "") ?: ""
         RuntimeConfig.password = GatewaySecretStore.loadPassword(context)
         if (server.isBlank() || deviceId.isBlank()) return
+        if (!GatewayConfigStore.isSyncEnabled(context)) {
+            GatewayDebugLog.add(context, "Inbound upload skipped: sync service disabled")
+            return
+        }
 
         val cfg = GatewayConfig(serverBaseUrl = server, deviceId = deviceId)
         val direction = "inbound"

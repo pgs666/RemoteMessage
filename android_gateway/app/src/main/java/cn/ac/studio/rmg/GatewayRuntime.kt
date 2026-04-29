@@ -367,6 +367,9 @@ object GatewayRuntime {
                         }
                     }
                 }
+                if (uploadedIds.isNotEmpty()) {
+                    GatewayStatsStore.addForwarded(context, uploadedIds.size)
+                }
                 local.deletePending(uploadedIds)
                 local.deletePending(droppedIds)
                 // Avoid hot-looping the same permanently-invalid records in a single flush batch.

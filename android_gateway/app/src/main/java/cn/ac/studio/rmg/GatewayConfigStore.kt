@@ -6,6 +6,7 @@ import org.json.JSONObject
 
 object GatewayConfigStore {
     const val PREF_NAME = "gateway_config"
+    private const val KEY_SYNC_ENABLED = "sync_enabled"
 
     data class Values(
         val serverBaseUrl: String,
@@ -57,9 +58,31 @@ object GatewayConfigStore {
 
         GatewaySecretStore.savePassword(context, password)
         RuntimeConfig.password = password.ifBlank { null }
-        GatewaySyncWorker.schedule(context)
-        GatewayForegroundService.start(context)
+        if (isSyncEnabled(context)) {
+            GatewaySyncWorker.schedule(context)
+            GatewayForegroundService.start(context)
+        }
         return GatewayConfig(serverBaseUrl = server, deviceId = device)
+    }
+
+    fun isSyncEnabled(context: Context): Boolean {
+        return context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_SYNC_ENABLED, true)
+    }
+
+    fun setSyncEnabled(context: Context, enabled: Boolean) {
+        context.getSharedPreferences(PREF_NAME, Context.MODE_PRIVATE)
+            .edit()
+            .putBoolean(KEY_SYNC_ENABLED, enabled)
+            .apply()
+
+        if (enabled) {
+            GatewaySyncWorker.schedule(context)
+            GatewayForegroundService.start(context)
+        } else {
+            GatewaySyncWorker.cancel(context)
+            GatewayForegroundService.stop(context)
+        }
     }
 
     fun webUiPort(context: Context): Int {

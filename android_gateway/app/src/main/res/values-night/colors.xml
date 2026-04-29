@@ -5,24 +5,15 @@
     <color name="rmg_primary_light">#143A36</color>
     <color name="rmg_accent">#64FFDA</color>
     <color name="rmg_on_primary">#102423</color>
-    <color name="rmg_primary_container">#173B4F</color>
-    <color name="rmg_on_primary_container">#DCEBFF</color>
-    <color name="rmg_secondary">#B0BEC5</color>
-    <color name="rmg_secondary_container">#263238</color>
-    <color name="rmg_on_secondary_container">#E5EEF2</color>
     <color name="rmg_background">#121212</color>
-    <color name="rmg_surface">#121212</color>
     <color name="rmg_surface_card">#1E1E1E</color>
-    <color name="rmg_surface_variant">#2A2A2A</color>
     <color name="rmg_on_surface">#E8EAED</color>
     <color name="rmg_on_surface_variant">#B8C0C7</color>
     <color name="rmg_outline">#3D444A</color>
     <color name="rmg_outline_soft">#2B3035</color>
     <color name="rmg_error">#FFB4AB</color>
-    <color name="rmg_clash_blue">#234979</color>
-    <color name="rmg_clash_title">#E8EAED</color>
-    <color name="rmg_clash_subtitle">#A8B0B8</color>
-    <color name="rmg_clash_row_text">#D0D4D8</color>
+    <color name="rmg_rikkaui_blue">#234979</color>
+    <color name="rmg_rikkaui_stopped">#5F666D</color>
     <color name="rmg_icon">#F1F3F4</color>
     <color name="rmg_header_text">#E3F2FD</color>
 </resources>
