@@ -42,7 +42,7 @@
                 android:layout_height="wrap_content"
                 android:text="@string/header_app_name"
                 android:textAppearance="@style/TextAppearance.MaterialComponents.Headline6"
-                android:textColor="@color/rmg_header_text" />
+                android:textColor="@color/rmg_on_surface" />
         </LinearLayout>
 
         <cn.ac.studio.rmg.ui.LargeActionCard

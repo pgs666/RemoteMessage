@@ -159,7 +159,7 @@ object GatewayRuntime {
                 if (resp.code == 204) {
                     GatewayDebugLog.add(context, "Poll result: no pending message")
                     flushPendingUploads(context, cfg)
-                    return "No pending message"
+                    return@use "No pending message"
                 }
                 if (!resp.isSuccessful) {
                     val body = resp.body?.string()?.takeIf { it.isNotBlank() } ?: "no body"
@@ -207,6 +207,7 @@ object GatewayRuntime {
                     snapshot = GatewaySimSupport.readSnapshot(context),
                     slotIndex = preferredSimSlotIndex
                 )
+                val resolvedSimCount = resolvedSim.simCount.takeIf { it > 0 }
                 GatewayDebugLog.add(
                     context,
                     "Resolved send SIM: slot=${resolvedSim.slotIndex ?: -1}, subId=${resolvedSim.subscriptionId ?: -1}, simPhone=${resolvedSim.simPhoneNumber ?: ""}"
@@ -221,7 +222,7 @@ object GatewayRuntime {
                         messageId = messageId,
                         simSlotIndex = resolvedSim.slotIndex,
                         simPhoneNumber = resolvedSim.simPhoneNumber,
-                        simCount = resolvedSim.simCount
+                        simCount = resolvedSimCount
                     )
                 }.onSuccess {
                     if (messageId != null) {
@@ -235,7 +236,7 @@ object GatewayRuntime {
                                 status = "dispatched",
                                 simSlotIndex = resolvedSim.slotIndex,
                                 simPhoneNumber = resolvedSim.simPhoneNumber,
-                                simCount = resolvedSim.simCount
+                                simCount = resolvedSimCount
                             )
                         )
                     }
@@ -251,7 +252,7 @@ object GatewayRuntime {
                                 status = "failed",
                                 simSlotIndex = resolvedSim.slotIndex,
                                 simPhoneNumber = resolvedSim.simPhoneNumber,
-                                simCount = resolvedSim.simCount,
+                                simCount = resolvedSimCount,
                                 errorCode = -1,
                                 errorMessage = "send invocation failed: ${sendError.debugSummary()}"
                             )
@@ -267,7 +268,7 @@ object GatewayRuntime {
                     GatewayDebugLog.add(context, "Outbound ack skipped: missing outboxId/ackToken")
                 }
                 flushPendingUploads(context, cfg)
-                return "SMS sent to $phone"
+                return@use "SMS sent to $phone"
             }
         } catch (t: Throwable) {
             GatewayDebugLog.add(context, "Poll/send failed: ${t.debugSummary()}")

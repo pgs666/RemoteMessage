@@ -94,15 +94,6 @@
                 app:subtext="@string/summary_flush_pending"
                 app:text="@string/btn_flush_pending" />
 
-            <cn.ac.studio.rmg.ui.LargeActionLabel
-                android:id="@+id/btnImportCert"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                app:icon="@drawable/ic_shield"
-                app:iconTint="@color/rmg_icon"
-                app:subtext="@string/summary_import_cert"
-                app:text="@string/btn_import_cert" />
-
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

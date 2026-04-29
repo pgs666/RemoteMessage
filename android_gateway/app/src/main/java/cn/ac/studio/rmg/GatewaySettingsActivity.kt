@@ -31,21 +31,6 @@ class GatewaySettingsActivity : AppCompatActivity() {
         )
     }
 
-    private val importCertLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri == null) return@registerForActivityResult
-
-        runCatching {
-            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-
-        runCatching {
-            GatewayCertificateStore.importFromUri(this, uri)
-            showStatus(getString(R.string.status_cert_imported))
-        }.onFailure {
-            showStatus(getString(R.string.status_cert_import_failed, it.message ?: "unknown"))
-        }
-    }
-
     private val requestRuntimePermissionsLauncher =
         registerForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { result ->
             markPermissionsRequested(result.keys)
@@ -97,9 +82,6 @@ class GatewaySettingsActivity : AppCompatActivity() {
         findViewById<View>(R.id.btnSyncHistory).setOnClickListener { syncHistory() }
         findViewById<View>(R.id.btnTestLocalSms).setOnClickListener { testLocalSms() }
         findViewById<View>(R.id.btnFlushPending).setOnClickListener { flushPendingUploads() }
-        findViewById<View>(R.id.btnImportCert).setOnClickListener {
-            importCertLauncher.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "*/*"))
-        }
         findViewById<View>(R.id.btnEditSimNumbers).setOnClickListener { showEditSimNumbersDialog() }
         findViewById<View>(R.id.btnClearGatewayDatabase).setOnClickListener { confirmClearGatewayDatabase() }
         findViewById<View>(R.id.btnClearServerDatabase).setOnClickListener { confirmClearServerDatabase() }

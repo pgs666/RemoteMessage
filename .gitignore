@@ -24,6 +24,9 @@ android_gateway/signing/
 **/bin/
 **/obj/
 
+# Rust
+**/target/
+
 # Local artifacts
 artifacts/
 

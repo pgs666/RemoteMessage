@@ -59,6 +59,16 @@
                 app:subtext="@string/summary_scan_onboarding"
                 app:text="@string/btn_scan_onboarding_qr" />
 
+            <cn.ac.studio.rmg.ui.LargeActionLabel
+                android:id="@+id/btnImportCert"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginVertical="2dp"
+                app:icon="@drawable/ic_shield"
+                app:iconTint="@color/rmg_icon"
+                app:subtext="@string/summary_import_cert"
+                app:text="@string/btn_import_cert" />
+
             <TextView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"

@@ -29,6 +29,21 @@ class ConnectionActivity : AppCompatActivity() {
             applyOnboardingPayload(text)
         }
 
+    private val importCertLauncher = registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@registerForActivityResult
+
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+
+        runCatching {
+            GatewayCertificateStore.importFromUri(this, uri)
+            showStatus(getString(R.string.status_cert_imported))
+        }.onFailure {
+            showStatus(getString(R.string.status_cert_import_failed, it.message ?: "unknown"))
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         GatewayTheme.apply(this)
         super.onCreate(savedInstanceState)
@@ -48,6 +63,7 @@ class ConnectionActivity : AppCompatActivity() {
         loadForm()
 
         findViewById<View>(R.id.btnScanOnboarding).setOnClickListener { launchQrScanner() }
+        findViewById<View>(R.id.btnImportCert).setOnClickListener { launchCertImport() }
         findViewById<View>(R.id.btnSaveConnection).setOnClickListener {
             saveFromForm(showSavedStatus = true)
         }
@@ -71,6 +87,10 @@ class ConnectionActivity : AppCompatActivity() {
 
     private fun launchQrScanner() {
         scanOnboardingLauncher.launch(Intent(this, QrScannerActivity::class.java))
+    }
+
+    private fun launchCertImport() {
+        importCertLauncher.launch(arrayOf("application/x-x509-ca-cert", "application/pkix-cert", "*/*"))
     }
 
     private fun applyOnboardingPayload(raw: String) {
