@@ -9,7 +9,7 @@ axum = { version = "0.8", features = ["macros"] }
 axum-server = { version = "0.7", default-features = false, features = ["tls-rustls-no-provider"] }
 base64 = "0.22"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
-get_if_addrs = "0.5"
+if-addrs = "0.15"
 qrcode = "0.14"
 rand = "0.8"
 rcgen = "0.12.1"

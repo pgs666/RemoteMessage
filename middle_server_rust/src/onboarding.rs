@@ -1,7 +1,7 @@
 use std::{env, fs, net::Ipv4Addr, path::Path};
 
 use anyhow::Context;
-use get_if_addrs::{IfAddr, get_if_addrs};
+use if_addrs::{IfAddr, get_if_addrs};
 use qrcode::{QrCode, render::unicode};
 
 use crate::{config::ServerRuntimeSettings, logger::FileLogger, runtime::runtime_directory};

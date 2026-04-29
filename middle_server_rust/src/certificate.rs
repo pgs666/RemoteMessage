@@ -5,7 +5,7 @@ use std::{
 };
 
 use anyhow::Context;
-use get_if_addrs::{IfAddr, get_if_addrs};
+use if_addrs::{IfAddr, get_if_addrs};
 use rcgen::{
     BasicConstraints, Certificate, CertificateParams, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, PKCS_RSA_SHA256, SanType,
