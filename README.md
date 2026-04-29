@@ -11,7 +11,7 @@ RemoteMessage 是一个完整的三端协作远程短信系统，允许你通过
 ```
 ┌─────────────────┐      HTTPS/RSA-OAEP      ┌─────────────────┐      HTTPS/RSA-OAEP      ┌─────────────────┐
 │  Flutter Client │ ◄──────────────────────► │  Middle Server  │ ◄──────────────────────► │ Android Gateway │
-│  (任意设备)      │                          │   (.NET 8)      │                          │  (安卓手机)      │
+│  (任意设备)      │                          │    (Rust)       │                          │  (安卓手机)      │
 └─────────────────┘                          └─────────────────┘                          └─────────────────┘
   • 查看/搜索短信                          • 消息中转                                  • 收发系统短信
   • 发送短信                              • 公钥管理                                  • 历史短信同步
@@ -52,28 +52,22 @@ RemoteMessage/
 │   ├── icons/                           # 应用图标资源
 │   ├── apply_client_icons.py            # 图标自动注入脚本
 │   └── configure_client_app_identity.py # 应用身份配置脚本 (包名/显示名)
-├── middle_server/                       # 中间服务器 (.NET 8)
-│   ├── Program.cs                       # 应用入口 & API路由
-│   ├── RemoteMessage.MiddleServer.csproj
+├── middle_server_rust/                  # 中间服务器 (Rust)
+│   ├── Cargo.toml                       # Rust crate 配置
+│   ├── Cargo.lock                       # 锁定依赖版本
 │   ├── README.md                        # 服务器详细文档
-│   ├── Api/
-│   │   └── ApiSupport.cs                # API辅助 (验证/加密/规范化)
-│   ├── Config/
-│   │   ├── ServerRuntimeSettings.cs     # 运行时配置 (令牌/端口/保留策略)
-│   │   ├── HttpsCertificateSettings.cs  # HTTPS证书配置
-│   │   └── OnboardingQrBootstrap.cs     # 首次启动QR码生成
-│   ├── Contracts/
-│   │   └── ApiContracts.cs              # API请求/响应DTO
-│   ├── Core/
-│   │   ├── MessageIdentity.cs           # 消息标识工具
-│   │   └── RuntimeLayout.cs             # 运行时目录布局
-│   ├── Data/
-│   │   └── SqliteRepository.cs          # SQLite数据访问层
-│   ├── Infrastructure/
-│   │   └── FileLogger.cs                # 文件日志提供程序
-│   └── Security/
-│       ├── CryptoState.cs               # RSA加密状态管理
-│       └── GatewayRegistry.cs           # 网关注册表
+│   └── src/
+│       ├── main.rs                      # 应用入口 & HTTPS 服务启动
+│       ├── api.rs                       # API 路由/验证/响应
+│       ├── repository.rs                # SQLite 数据访问层
+│       ├── crypto.rs                    # RSA-OAEP-SHA256 加解密
+│       ├── certificate.rs               # 自签证书生成与加载
+│       ├── config.rs                    # 运行时配置 (令牌/端口/保留策略)
+│       ├── onboarding.rs                # 首次启动 QR 码生成
+│       ├── models.rs                    # API 请求/响应 DTO
+│       ├── registry.rs                  # 网关公钥注册表
+│       ├── logger.rs                    # 文件日志
+│       └── runtime.rs                   # 运行时目录布局
 ├── android_gateway/                     # Android网关应用
 │   ├── build.gradle                     # 根项目构建配置
 │   ├── settings.gradle                  # Gradle设置
@@ -155,14 +149,14 @@ RemoteMessage/
 - **日志查看**：内置调试日志和活动日志查看器
 
 ### Middle Server
-- **.NET 8 / ASP.NET Core**：现代高性能后端框架
+- **Rust / Axum / Tokio**：现代高性能异步后端
 - **自动初始化**：首次启动自动生成数据库、配置文件、证书、QR码
 - **网关注册**：管理网关公钥，支持多网关
 - **加密转发**：RSA-OAEP加密/解密上下行消息
 - **消息去重**：自动过滤重复短信
 - **会话置顶**：客户端置顶会话持久化
 - **API日志**：所有接口访问记录入库
-- **单文件发布**：Linux x64 / Linux ARM64 单文件可执行程序
+- **Release 二进制**：Linux x64 / Windows x64 可执行程序
 - **内置SQLite**：原生库打包进单文件，无需额外部署
 - **令牌鉴权**：分段令牌机制 (X-Gateway-Token / X-Client-Token / X-Admin-Token)
 - **维护策略**：可配置的日志轮转、数据保留、数据库大小限制
@@ -189,7 +183,6 @@ RemoteMessage/
 从 [GitHub Releases](https://github.com/pgs666/RemoteMessage/releases) 下载对应平台的单文件可执行程序：
 
 - **Linux x64**：`RemoteMessageServer-linux-x64`
-- **Linux ARM64**（树莓派等）：`RemoteMessageServer-linux-arm64`
 - **Windows x64**：`RemoteMessageServer-windows-x64`
 
 #### 1.2 解压并运行
@@ -200,7 +193,7 @@ RemoteMessage/
 chmod +x RemoteMessageServer-linux-x64
 
 # 运行
-./RemoteMessage.MiddleServer
+./RemoteMessageServer-linux-x64
 ```
 
 **Windows:**
@@ -567,7 +560,7 @@ adb install flutter-client-android.apk
 ### 1. 启动Middle Server
 
 ```bash
-dotnet run --project middle_server/RemoteMessage.MiddleServer.csproj
+cargo run --release --manifest-path middle_server_rust/Cargo.toml
 ```
 
 首次启动后会在可执行文件同目录自动生成：
@@ -575,7 +568,8 @@ dotnet run --project middle_server/RemoteMessage.MiddleServer.csproj
 server.db              # SQLite数据库
 server.conf            # 配置文件
 server-cert.cer        # 客户端/网关注入的根证书
-server-cert.pfx        # 服务端自用证书
+server-cert.pem        # HTTPS 服务端证书
+server-key.pem         # HTTPS 服务端私钥
 server-crypto-private.pem  # 服务器RSA私钥
 onboarding-qr.txt      # 入网QR码内容 (首次启动)
 ```
@@ -590,9 +584,8 @@ admin_token=replace-with-a-long-random-string
 
 **发布为单文件 (推荐生产环境)：**
 ```bash
-dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
-  -c Release -r linux-x64 --self-contained true \
-  -o publish/linux-x64
+cargo build --release --manifest-path middle_server_rust/Cargo.toml
+# 输出：middle_server_rust/target/release/remote_message_middle_server
 ```
 
 ### 2. 配置Android网关
@@ -630,7 +623,7 @@ dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
 ### 前置要求
 - **Flutter客户端**：Flutter SDK (stable), Python 3 + Pillow, Java 17 (Android), Ninja + GTK (Linux)
 - **Android网关**：Java 17, Gradle 8.7, Android SDK (API 34, min SDK 23)
-- **Middle Server**：.NET 8.0 SDK
+- **Middle Server**：Rust stable toolchain
 
 ### Flutter客户端
 
@@ -680,16 +673,10 @@ gradle -p android_gateway :app:assembleRelease
 
 ```bash
 # 开发运行
-dotnet run --project middle_server/RemoteMessage.MiddleServer.csproj
+cargo run --release --manifest-path middle_server_rust/Cargo.toml
 
-# 发布单文件
-dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
-  -c Release -r linux-x64 --self-contained true \
-  -o publish/linux-x64
-
-dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
-  -c Release -r linux-arm64 --self-contained true \
-  -o publish/linux-arm64
+# 发布 Release 二进制
+cargo build --release --manifest-path middle_server_rust/Cargo.toml
 ```
 
 ---
@@ -702,7 +689,7 @@ dotnet publish middle_server/RemoteMessage.MiddleServer.csproj \
 |----------|----------|----------|
 | **flutter-client.yml** | push / PR | Linux / Windows / Android (signed APK) / iOS (no-codesign app + unsigned IPA) |
 | **android-gateway.yml** | push / PR | Android Debug APK |
-| **middle-server.yml** | push / PR | Linux x64 / Linux ARM64 单文件可执行程序 |
+| **middle-server.yml** | push / PR | Linux x64 / Windows x64 可执行程序 |
 
 **签名密钥**：Android构建通过GitHub Secrets配置签名，CI自动解码keystore并完成签名。
 
@@ -813,7 +800,7 @@ Middle Server内置自动维护任务：
 3. **令牌同步**：修改 `server.conf` 中的令牌后，需同步更新三端配置
 4. **首次同步**：历史短信首次同步量大时会显示进度，请耐心等待
 5. **弱网环境**：客户端有自动刷新，但弱网下仍建议保留手动同步作为兜底
-6. **单文件发布**：Linux下的SQLite原生库 (`libe_sqlite3.so`) 已打包进服务端单文件
+6. **Release 二进制**：Rust 服务端使用 `rusqlite` bundled SQLite，发布时无需单独准备 SQLite 动态库
 7. **QR码入网**：推荐使用QR码快速配置，避免手动输入错误
 8. **数据库维护**：服务端会自动清理过期数据，无需手动干预
 
@@ -825,8 +812,8 @@ Middle Server内置自动维护任务：
 |------|------|------|----------|
 | Flutter Client | Flutter (Material 3) | Dart | sqlite3, path_provider, file_selector, flutter_secure_storage, flutter_contacts, image_picker |
 | Android Gateway | Android (Kotlin) | Kotlin | OkHttp 4.12, NanoHTTPD 2.3.1, WorkManager, AndroidX, ZXing 3.5.3 |
-| Middle Server | ASP.NET Core | C# | Microsoft.Data.Sqlite 8.0.4, QRCoder 1.7.1, System.Security.Cryptography |
-| CI/CD | GitHub Actions | - | Flutter Action, .NET Setup, Gradle, Java 17 |
+| Middle Server | Axum + Tokio | Rust | rusqlite, rustls, rsa, qrcode |
+| CI/CD | GitHub Actions | - | Flutter Action, Rust toolchain, Gradle, Java 17 |
 | 工具脚本 | Python 3 | Python | Pillow (图标生成), plistlib (iOS配置) |
 
 ---
@@ -837,7 +824,7 @@ Middle Server内置自动维护任务：
 |------|--------------|--------|
 | Android Gateway | `cn.ac.studio.rmg` | `cn.ac.studio.rmg` |
 | Flutter Client (Android) | `cn.ac.studio.rmc` | `cn.ac.studio.rmc` |
-| Middle Server | `RemoteMessage.MiddleServer` | N/A |
+| Middle Server | `remote_message_middle_server` | N/A |
 
 ---
 
@@ -846,4 +833,4 @@ Middle Server内置自动维护任务：
 - **GitHub**: https://github.com/pgs666/RemoteMessage
 - **默认分支**: `main`
 
-如需深入了解Middle Server的实现细节，请阅读：[middle_server/README.md](middle_server/README.md)
+如需深入了解Middle Server的实现细节，请阅读：[middle_server_rust/README.md](middle_server_rust/README.md)

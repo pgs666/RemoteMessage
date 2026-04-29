@@ -7,78 +7,44 @@ on:
 
 jobs:
   build-and-publish:
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - rid: linux-x64
+          - os: ubuntu-latest
             output_id: linux-x64
-            is_windows: false
-          - rid: linux-arm64
-            output_id: linux-arm64
-            is_windows: false
-          - rid: win-x64
+            exe_suffix: ""
+          - os: windows-latest
             output_id: windows-x64
-            is_windows: true
-          - rid: win-arm64
-            output_id: windows-arm64
-            is_windows: true
+            exe_suffix: ".exe"
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Restore
-        run: dotnet restore middle_server/RemoteMessage.MiddleServer.csproj
+      - name: Build (${{ matrix.output_id }})
+        run: cargo build --release --manifest-path middle_server_rust/Cargo.toml
 
-      - name: Publish (${{ matrix.rid }})
-        run: >-
-          dotnet publish middle_server/RemoteMessage.MiddleServer.csproj
-          -c Release
-          -r ${{ matrix.rid }}
-          --self-contained true
-          /p:PublishSingleFile=true
-          /p:IncludeNativeLibrariesForSelfExtract=true
-          /p:IncludeAllContentForSelfExtract=true
-          /p:EnableCompressionInSingleFile=true
-          /p:PublishTrimmed=false
-          /p:DebugType=embedded
-          -o artifacts/middle-server/${{ matrix.output_id }}
-
-      - name: Normalize single-file output (${{ matrix.rid }})
+      - name: Normalize output (${{ matrix.output_id }})
         shell: bash
         run: |
           set -euo pipefail
           out_dir="artifacts/middle-server/${{ matrix.output_id }}"
-
-          if [[ "${{ matrix.is_windows }}" == "true" ]]; then
-            source_file="$out_dir/RemoteMessage.MiddleServer.exe"
-            target_file="$out_dir/RemoteMessageServer-${{ matrix.output_id }}.exe"
-          else
-            source_file="$out_dir/RemoteMessage.MiddleServer"
-            target_file="$out_dir/RemoteMessageServer-${{ matrix.output_id }}"
-          fi
+          source_file="middle_server_rust/target/release/remote_message_middle_server${{ matrix.exe_suffix }}"
+          target_file="$out_dir/RemoteMessageServer-${{ matrix.output_id }}${{ matrix.exe_suffix }}"
 
           if [[ ! -f "$source_file" ]]; then
-            echo "::error::Expected publish binary not found: $source_file"
-            ls -la "$out_dir"
+            echo "::error::Expected build binary not found: $source_file"
+            ls -la "middle_server_rust/target/release" || true
             exit 1
           fi
 
-          mv "$source_file" "$target_file"
-
-          shopt -s dotglob nullglob
-          for item in "$out_dir"/*; do
-            if [[ "$item" != "$target_file" ]]; then
-              rm -rf "$item"
-            fi
-          done
+          mkdir -p "$out_dir"
+          cp "$source_file" "$target_file"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
